@@ -1,0 +1,15 @@
+.DS_Store
+WindowsAgent/**/bin/
+WindowsAgent/**/obj/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.vs/
+*.user
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+WindowsAgent/**/appsettings.Development.json
+WindowsAgent/**/appsettings.Local.json

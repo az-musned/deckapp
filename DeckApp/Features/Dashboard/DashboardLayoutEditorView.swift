@@ -1,0 +1,313 @@
+import SwiftUI
+
+struct DashboardLayoutEditorView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    @State private var showGallery = false
+    @State private var editingWidget: RoomWidgetDefinition?
+    @State private var widgetAwaitingDeletion: RoomWidgetDefinition?
+    @State private var showResetConfirmation = false
+    @State private var editMode: EditMode = .inactive
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Arrange the Room Control dashboard, add capability-driven widgets, and choose separate sizes for iPhone and iPad.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Widget Order") {
+                    ForEach(appState.roomControlTemplate.widgets) { widget in
+                        widgetRow(widget)
+                    }
+                    .onMove(perform: appState.moveRoomWidgets)
+                }
+            }
+            .environment(\.editMode, $editMode)
+            .scrollContentBackground(.hidden)
+            .navigationTitle("Dashboard Layout")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button { showGallery = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Open widget gallery")
+                    Menu {
+                        Button(editMode == .active ? "Finish Reordering" : "Reorder Widgets", systemImage: "arrow.up.arrow.down") {
+                            withAnimation(DesignToken.Animation.responsive) {
+                                editMode = editMode == .active ? .inactive : .active
+                            }
+                        }
+                        Button("Reset Room Control", systemImage: "arrow.counterclockwise", role: .destructive) {
+                            showResetConfirmation = true
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+            .sheet(isPresented: $showGallery) {
+                WidgetGalleryView()
+            }
+            .sheet(item: $editingWidget) { widget in
+                WidgetConfigurationView(widget: widget)
+            }
+            .confirmationDialog(
+                "Delete this widget?",
+                isPresented: deletionBinding,
+                titleVisibility: .visible
+            ) {
+                if let widget = widgetAwaitingDeletion {
+                    Button("Delete \(widget.title)", role: .destructive) {
+                        appState.deleteRoomWidget(id: widget.id)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The widget is removed from this dashboard. Companion mappings and device configuration are not deleted.")
+            }
+            .confirmationDialog(
+                "Reset the dashboard layout?",
+                isPresented: $showResetConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Reset Room Control", role: .destructive) {
+                    appState.resetRoomControlLayout()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This restores the default widgets and order. Companion button mappings remain saved.")
+            }
+        }
+    }
+
+    private func widgetRow(_ widget: RoomWidgetDefinition) -> some View {
+        HStack(spacing: DesignToken.Spacing.small) {
+            GlassIcon(
+                symbol: widget.symbol,
+                tint: Color.controlDeckTint(named: widget.tintName),
+                size: 38
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(widget.title).font(.subheadline.weight(.semibold))
+                Text("\(widget.kind.title) · iPhone \((widget.phoneSize ?? widget.size).title) · iPad \((widget.padSize ?? widget.size).title)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button {
+                editingWidget = widget
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .buttonStyle(.borderless)
+            Button(role: .destructive) {
+                widgetAwaitingDeletion = widget
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private var deletionBinding: Binding<Bool> {
+        Binding(
+            get: { widgetAwaitingDeletion != nil },
+            set: { if !$0 { widgetAwaitingDeletion = nil } }
+        )
+    }
+}
+
+private struct WidgetGalleryView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 155), spacing: DesignToken.Spacing.medium)], spacing: DesignToken.Spacing.medium) {
+                    ForEach(RoomWidgetCatalog.all) { prototype in
+                        galleryCard(prototype)
+                    }
+                }
+                .padding()
+            }
+            .background(AppBackground())
+            .navigationTitle("Widget Gallery")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func galleryCard(_ prototype: RoomWidgetDefinition) -> some View {
+        let tint = Color.controlDeckTint(named: prototype.tintName)
+        return Button {
+            appState.addRoomWidget(prototype.duplicated())
+            RemoteHaptics.click()
+        } label: {
+            VStack(alignment: .leading, spacing: DesignToken.Spacing.small) {
+                GlassIcon(symbol: prototype.symbol, tint: tint, size: 42)
+                Text(prototype.kind.title)
+                    .font(.headline)
+                Text(prototype.kind.galleryDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                Spacer(minLength: 0)
+                Label("Add Widget", systemImage: "plus.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, minHeight: 175, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.card, tint: tint.opacity(0.12), interactive: true)
+    }
+}
+
+private struct WidgetConfigurationView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    @State private var widget: RoomWidgetDefinition
+
+    private let symbols = [
+        "lightbulb.fill", "snowflake", "tv.fill", "powerplug.fill", "slider.vertical.3",
+        "square.grid.2x2.fill", "rectangle.and.hand.point.up.left.fill", "house.fill", "sparkles", "star.fill"
+    ]
+
+    init(widget: RoomWidgetDefinition) {
+        _widget = State(initialValue: widget)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Identity") {
+                    TextField("Title", text: $widget.title)
+                    TextField("Subtitle", text: $widget.subtitle)
+                    ScrollView(.horizontal) {
+                        HStack(spacing: DesignToken.Spacing.small) {
+                            ForEach(symbols, id: \.self) { symbol in
+                                Button { widget.symbol = symbol } label: {
+                                    Image(systemName: symbol)
+                                        .frame(width: 38, height: 38)
+                                        .background(widget.symbol == symbol ? Color.controlDeckTint(named: widget.tintName).opacity(0.24) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+
+                    Picker("Accent", selection: $widget.tintName) {
+                        ForEach(ControlDeckTint.allCases) { tint in
+                            Text(tint.title).tag(tint.rawValue)
+                        }
+                    }
+                }
+
+                Section("Layout") {
+                    Picker("Default size", selection: $widget.size) {
+                        ForEach(RoomWidgetSize.allCases, id: \.self) { size in
+                            Text(size.title).tag(size)
+                        }
+                    }
+                    optionalSizePicker("iPhone override", selection: $widget.phoneSize)
+                    optionalSizePicker("iPad override", selection: $widget.padSize)
+                }
+
+                Section {
+                    LabeledContent("Backend", value: widget.backend.backend.title)
+                    TextField("Backend identifier", text: $widget.backend.identifier)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Mapping")
+                } footer: {
+                    Text("Phase 3 will replace manual Home Assistant identifiers with discovered entity selection. Companion mappings remain configured inside the Control Deck.")
+                }
+
+                Section("Supported Capabilities") {
+                    ForEach(widget.capabilities) { capability in
+                        LabeledContent(capability.name) {
+                            Text(capability.availability.rawValue.capitalized)
+                                .foregroundStyle(capability.availability == .available ? DesignToken.Color.positive : .secondary)
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .navigationTitle("Configure Widget")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        widget.title = widget.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        appState.updateRoomWidget(widget)
+                        dismiss()
+                    }
+                    .disabled(widget.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func optionalSizePicker(_ title: String, selection: Binding<RoomWidgetSize?>) -> some View {
+        Picker(title, selection: selection) {
+            Text("Use Default").tag(Optional<RoomWidgetSize>.none)
+            ForEach(RoomWidgetSize.allCases, id: \.self) { size in
+                Text(size.title).tag(Optional(size))
+            }
+        }
+    }
+}
+
+private extension RoomWidgetKind {
+    var title: String {
+        switch self {
+        case .light: "Light"
+        case .climate: "Climate"
+        case .television: "Television"
+        case .pcPower: "PC Power"
+        case .audioMixer: "Audio Mixer"
+        case .companionActions: "Companion Actions"
+        case .remoteInputLauncher: "PC Remote"
+        }
+    }
+
+    var galleryDescription: String {
+        switch self {
+        case .light: "Power, brightness, and supported color controls."
+        case .climate: "Temperature, HVAC, fan, and swing controls."
+        case .television: "Volume, source, media, and directional remote."
+        case .pcPower: "Guarded plug-on and PC boot workflow."
+        case .audioMixer: "Capability-driven audio channel levels and mute."
+        case .companionActions: "Existing Companion actions, macros, and folders."
+        case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
+        }
+    }
+}
+
+private extension WidgetBackendKind {
+    var title: String {
+        switch self {
+        case .mock: "Mock"
+        case .homeAssistant: "Home Assistant"
+        case .windowsAgent: "Windows Agent"
+        case .companion: "Companion"
+        }
+    }
+}
