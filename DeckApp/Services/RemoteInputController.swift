@@ -43,6 +43,8 @@ final class RemoteInputController {
     private var pointerBuffer = PointerEventBuffer()
     private var flushTask: Task<Void, Never>?
     private var connectionMonitorTask: Task<Void, Never>?
+    private var isRecoveringTransport = false
+    private var connectionEpoch: UInt64 = 0
     private var nextSequence: UInt64 = 1
     private let pairingKeychain = KeychainSecretStore(service: "com.example.DeckApp.windows-agent")
 
@@ -150,6 +152,7 @@ final class RemoteInputController {
     }
 
     func connect() async {
+        connectionEpoch &+= 1
         await refreshAgentSecurityState()
         guard pairingState.isPaired else {
             connectionState = .authenticationRejected
@@ -185,6 +188,8 @@ final class RemoteInputController {
     }
 
     func disconnect() async {
+        connectionEpoch &+= 1
+        isRecoveringTransport = false
         connectionMonitorTask?.cancel()
         connectionMonitorTask = nil
         flushTask?.cancel()
@@ -220,9 +225,7 @@ final class RemoteInputController {
         guard connectionState.acceptsInput else { return }
         guard await service.isConnected() else {
             let reason = await service.disconnectReason()
-            await disconnect()
-            connectionState = .disconnected
-            lastInteraction = reason ?? "Agent disconnected"
+            await recoverTransport(after: reason ?? "Agent disconnected")
             return
         }
 
@@ -470,14 +473,77 @@ final class RemoteInputController {
     }
 
     private func handleTransportFailure(_ error: Error) async {
+        await recoverTransport(after: error.localizedDescription)
+    }
+
+    private func recoverTransport(after reason: String) async {
+        guard !isRecoveringTransport else { return }
+        guard connectionState.acceptsInput || connectionState == .connecting else { return }
+        isRecoveringTransport = true
+        let recoveryEpoch = connectionEpoch
+
         flushTask?.cancel()
         flushTask = nil
         pointerBuffer = PointerEventBuffer()
         _ = heldState.releaseAll()
         isDragging = false
-        connectionState = .unavailable(error.localizedDescription)
-        lastInteraction = "Input stopped"
         await service.disconnect()
+
+        var finalError = reason
+        let delays: [Duration] = [.milliseconds(250), .milliseconds(750), .seconds(1.5), .seconds(3)]
+        for delay in delays {
+            guard recoveryEpoch == connectionEpoch else {
+                isRecoveringTransport = false
+                return
+            }
+
+            connectionState = .connecting
+            lastInteraction = "Reconnecting…"
+            do {
+                try await Task.sleep(for: delay)
+                guard recoveryEpoch == connectionEpoch else {
+                    isRecoveringTransport = false
+                    return
+                }
+                let session = try await service.connect()
+                guard recoveryEpoch == connectionEpoch else {
+                    await service.disconnect()
+                    isRecoveringTransport = false
+                    return
+                }
+                connectionState = session.latencyMilliseconds >= 80
+                    ? .highLatency(route: session.route, latencyMilliseconds: session.latencyMilliseconds)
+                    : .connected(route: session.route, latencyMilliseconds: session.latencyMilliseconds)
+                lastInteraction = "Reconnected · \(session.latencyMilliseconds) ms"
+                isRecoveringTransport = false
+                return
+            } catch WindowsRemoteInputError.unpairedClient {
+                connectionState = .authenticationRejected
+                lastInteraction = "Windows Agent revoked this device"
+                isRecoveringTransport = false
+                return
+            } catch WindowsRemoteInputError.remoteInputDisabled {
+                connectionState = .permissionDisabled
+                lastInteraction = "Input disabled on Windows"
+                isRecoveringTransport = false
+                return
+            } catch WindowsRemoteInputError.emergencyInputDisabled {
+                connectionState = .emergencyDisabled
+                lastInteraction = "Emergency Disable Input active"
+                isRecoveringTransport = false
+                return
+            } catch {
+                finalError = error.localizedDescription
+            }
+        }
+
+        guard recoveryEpoch == connectionEpoch else {
+            isRecoveringTransport = false
+            return
+        }
+        connectionState = .unavailable(finalError)
+        lastInteraction = "Reconnect failed"
+        isRecoveringTransport = false
     }
 
     private static var nowMilliseconds: UInt64 {
