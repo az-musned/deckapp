@@ -20,11 +20,18 @@ The iOS app can now select this live transport from Remote Settings, pair throug
 ## Build on Windows
 
 1. Install the latest patched [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
-2. Set `Agent:CertificateThumbprint` and a specific private `Agent:BindAddress` in `DeckWindowsAgent/appsettings.json`.
-3. Run `dotnet build WindowsAgent/DeckWindowsAgent/DeckWindowsAgent.csproj`.
-4. Run `dotnet run --project WindowsAgent/DeckWindowsAgent.Validation/DeckWindowsAgent.Validation.csproj`.
-5. Run the Agent from a visible local console during development.
+2. For a nearby iPad on the PC hotspot or home LAN, open PowerShell as Administrator and run:
+   `powershell -ExecutionPolicy Bypass -File WindowsAgent\scripts\Configure-LocalConnection.ps1 -BindAddress 192.168.137.1`
+   Omit `-BindAddress` only when the PC has exactly one private address; the script prefers the standard Windows hotspot address when present.
+3. Copy the generated `WindowsAgent\DeckAgent-Local-Root.cer` public certificate to the iPad. Install it, then enable it under Settings > General > About > Certificate Trust Settings.
+4. In DeckApp Remote Settings, use the address printed by the script, such as `https://192.168.137.1:8732`. This route stays directly on the PC hotspot and does not use Tailscale.
+5. For manual configuration instead, set `Agent:CertificateThumbprint` and one explicit private `Agent:BindAddress` in `DeckWindowsAgent/appsettings.Local.json`.
+6. Run `dotnet build WindowsAgent/DeckWindowsAgent/DeckWindowsAgent.csproj`.
+7. Run `dotnet run --project WindowsAgent/DeckWindowsAgent.Validation/DeckWindowsAgent.Validation.csproj`.
+8. Run the Agent from a visible local console during development.
 
 Press `I` locally to enable/disable remote input, `E` for emergency disable, `P` to list paired devices, or `R` to revoke one. Keep the console visible during this development phase.
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
+
+`appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate and restricts its firewall rule to the selected private interface and `LocalSubnet`.

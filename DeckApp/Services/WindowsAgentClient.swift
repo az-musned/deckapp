@@ -62,6 +62,12 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     private var receiveTask: Task<Void, Never>?
     private var pendingAcknowledgements: [UInt64: Date] = [:]
     private(set) var measuredLatencyMilliseconds: Int?
+    private var lastKnownSecurityState = WindowsAgentSecurityState(
+        remoteInputAllowed: false,
+        inputInjectionAvailable: false,
+        emergencyInputDisabled: false
+    )
+    private var lastDisconnectReason: String?
 
     init(address: String, session: URLSession? = nil, defaults: UserDefaults = .standard) {
         self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -171,11 +177,11 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
-        return WindowsAgentSecurityState(
-            remoteInputAllowed: false,
-            inputInjectionAvailable: false,
-            emergencyInputDisabled: false
-        )
+        return lastKnownSecurityState
+    }
+
+    func refreshedSecurityState() async throws -> WindowsAgentSecurityState {
+        try await fetchSecurityState().state
     }
 
     func capabilitySnapshot() async -> WindowsAgentCapabilitySnapshot {
@@ -187,6 +193,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     }
 
     func connect() async throws -> RemoteAgentSession {
+        lastDisconnectReason = nil
         let security = try await fetchSecurityState()
         guard security.protocolVersion == protocolVersion else { throw WindowsRemoteInputError.protocolMismatch }
         guard !security.state.emergencyInputDisabled else { throw WindowsRemoteInputError.emergencyInputDisabled }
@@ -243,6 +250,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         measuredLatencyMilliseconds
     }
 
+    func disconnectReason() async -> String? {
+        lastDisconnectReason
+    }
+
     func disconnect() async {
         receiveTask?.cancel()
         receiveTask = nil
@@ -254,12 +265,14 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     private func fetchSecurityState() async throws -> (state: WindowsAgentSecurityState, protocolVersion: Int) {
         let response: SecurityDTO = try await request(method: "GET", path: "/api/v1/agent/security", body: nil, authenticated: true)
         guard response.protocolVersion == protocolVersion else { throw WindowsRemoteInputError.protocolMismatch }
+        let state = WindowsAgentSecurityState(
+            remoteInputAllowed: response.remoteInputAllowed,
+            inputInjectionAvailable: response.inputInjectionAvailable,
+            emergencyInputDisabled: response.emergencyInputDisabled
+        )
+        lastKnownSecurityState = state
         return (
-            WindowsAgentSecurityState(
-                remoteInputAllowed: response.remoteInputAllowed,
-                inputInjectionAvailable: response.inputInjectionAvailable,
-                emergencyInputDisabled: response.emergencyInputDisabled
-            ),
+            state,
             response.protocolVersion
         )
     }
@@ -274,15 +287,24 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
                     }
                     pendingAcknowledgements = pendingAcknowledgements.filter { $0.key > acknowledgement.lastAcceptedSequence }
                 } else if let error: ProtocolErrorDTO = try? decode(message) {
-                    _ = error
+                    lastDisconnectReason = error.message
                     socket.cancel(with: .policyViolation, reason: nil)
                     break
                 }
             }
         } catch {
-            // The controller observes the failure on its next send or reconnect attempt.
+            if !Task.isCancelled {
+                lastDisconnectReason = error.localizedDescription
+            }
         }
         if webSocket === socket {
+            if lastDisconnectReason == nil {
+                if let reason = socket.closeReason.flatMap({ String(data: $0, encoding: .utf8) }), !reason.isEmpty {
+                    lastDisconnectReason = reason
+                } else {
+                    lastDisconnectReason = "Windows Agent closed the input connection."
+                }
+            }
             webSocket = nil
             pendingAcknowledgements.removeAll()
         }

@@ -6,6 +6,7 @@ using DeckWindowsAgent.Security;
 using DeckWindowsAgent.Transport;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
 var options = builder.Configuration.GetSection("Agent").Get<AgentOptions>() ?? new AgentOptions();
 options.Validate();
 var certificate = CertificateLoader.LoadCurrentUserCertificate(options.CertificateThumbprint);

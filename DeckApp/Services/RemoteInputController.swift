@@ -206,24 +206,58 @@ final class RemoteInputController {
     private func startConnectionMonitor() {
         connectionMonitorTask?.cancel()
         connectionMonitorTask = Task { [weak self] in
+            var tick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(750))
                 guard !Task.isCancelled, let self else { return }
-                await self.refreshConnectedSessionState()
+                tick += 1
+                await self.refreshConnectedSessionState(checkSecurity: tick % 7 == 0)
             }
         }
     }
 
-    private func refreshConnectedSessionState() async {
+    private func refreshConnectedSessionState(checkSecurity: Bool) async {
         guard connectionState.acceptsInput else { return }
         guard await service.isConnected() else {
+            let reason = await service.disconnectReason()
             await disconnect()
             connectionState = .disconnected
-            lastInteraction = "Agent disconnected"
+            lastInteraction = reason ?? "Agent disconnected"
             return
         }
 
-        let updatedSecurity = await service.securityState()
+        if let latency = await service.currentLatencyMilliseconds() {
+            switch connectionState {
+            case .connected(let route, _), .highLatency(let route, _):
+                connectionState = latency >= 80
+                    ? .highLatency(route: route, latencyMilliseconds: latency)
+                    : .connected(route: route, latencyMilliseconds: latency)
+            default:
+                break
+            }
+        }
+
+        guard checkSecurity else { return }
+
+        let updatedSecurity: WindowsAgentSecurityState
+        do {
+            updatedSecurity = try await service.refreshedSecurityState()
+        } catch WindowsRemoteInputError.unpairedClient {
+            await disconnect()
+            connectionState = .authenticationRejected
+            lastInteraction = "Windows Agent revoked this device"
+            return
+        } catch WindowsRemoteInputError.protocolMismatch {
+            await disconnect()
+            connectionState = .unavailable(WindowsRemoteInputError.protocolMismatch.localizedDescription)
+            lastInteraction = "Agent protocol changed"
+            return
+        } catch {
+            // A failed status refresh must not override a live authenticated
+            // WebSocket. The Agent closes that socket itself for safety changes.
+            return
+        }
+
         securityState = updatedSecurity
         if updatedSecurity.emergencyInputDisabled {
             await disconnect()
@@ -237,15 +271,6 @@ final class RemoteInputController {
             await disconnect()
             connectionState = .unavailable("Windows input injection is unavailable in the current desktop state.")
             lastInteraction = "Windows desktop unavailable"
-        } else if let latency = await service.currentLatencyMilliseconds() {
-            switch connectionState {
-            case .connected(let route, _), .highLatency(let route, _):
-                connectionState = latency >= 80
-                    ? .highLatency(route: route, latencyMilliseconds: latency)
-                    : .connected(route: route, latencyMilliseconds: latency)
-            default:
-                break
-            }
         }
     }
 

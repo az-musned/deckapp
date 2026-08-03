@@ -7,11 +7,13 @@ protocol WindowsRemoteInputServing: Sendable {
     func confirmPairing(challengeID: UUID, code: String) async throws -> WindowsAgentPairingResult
     func revokePairing() async
     func securityState() async -> WindowsAgentSecurityState
+    func refreshedSecurityState() async throws -> WindowsAgentSecurityState
     func capabilitySnapshot() async -> WindowsAgentCapabilitySnapshot
     func perform(_ command: WindowsAgentCapabilityCommand) async throws -> WindowsAgentCommandResult
     func connect() async throws -> RemoteAgentSession
     func isConnected() async -> Bool
     func currentLatencyMilliseconds() async -> Int?
+    func disconnectReason() async -> String?
     func send(_ events: [RemoteInputEvent]) async throws
     func disconnect() async
 }
@@ -138,6 +140,10 @@ actor MockWindowsRemoteInputService: WindowsRemoteInputServing {
         )
     }
 
+    func refreshedSecurityState() async throws -> WindowsAgentSecurityState {
+        await securityState()
+    }
+
     func capabilitySnapshot() async -> WindowsAgentCapabilitySnapshot {
         WindowsAgentCapabilitySnapshot(
             applications: applications,
@@ -251,6 +257,8 @@ actor MockWindowsRemoteInputService: WindowsRemoteInputServing {
     func isConnected() async -> Bool { connected }
 
     func currentLatencyMilliseconds() async -> Int? { latencyMilliseconds }
+
+    func disconnectReason() async -> String? { nil }
 
     func send(_ events: [RemoteInputEvent]) async throws {
         guard connected else { throw WindowsRemoteInputError.disconnected }

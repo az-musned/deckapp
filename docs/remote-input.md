@@ -6,6 +6,8 @@ DeckApp contains the iPhone/iPad Remote UI, input-event model, coalescing and sa
 
 The live address must use `https://`; its certificate must be trusted by iOS/iPadOS and match the configured hostname or IP address. DeckApp uses normal system TLS validation and contains no trust-all delegate or certificate-validation bypass.
 
+For the lowest-latency nearby route, connect the iPad to the PC's Mobile Hotspot and run `WindowsAgent/scripts/Configure-LocalConnection.ps1` on Windows. It creates a machine-local TLS identity for the selected hotspot/LAN IP, writes ignored local Agent settings, and adds a firewall rule limited to that address and the local subnet. After installing and explicitly trusting the exported public root certificate on the iPad, enter the printed `https://<hotspot-ip>:8732` address in Remote Settings. Tailscale remains an optional outside-home route, not part of this local data path.
+
 Before applying an address, DeckApp rejects HTTP, loopback destinations, URLs containing username/password fields, query parameters, and fragments. The diagnostics label RFC1918, link-local, `.local`, Tailscale `100.64.0.0/10`, and `.ts.net` routes without exposing credentials. Contract validation also asserts the exact synthesized Swift enum JSON consumed by the Windows parser.
 
 The mock now exercises an explicit pairing challenge, invalid-code rejection, a Keychain-stored credential, pairing revocation, the Windows-side Allow Remote Input permission, input-injection availability, and an emergency Disable Input state. Its development-only pairing code is `482913`. The production Agent must generate its own short-lived codes and credentials.
