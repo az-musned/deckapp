@@ -128,6 +128,6 @@ public static class InputWebSocketEndpoint
     private static Task SendJsonAsync<T>(WebSocket socket, T value, CancellationToken cancellationToken)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-        return socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken).AsTask();
+        return socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
     }
 }

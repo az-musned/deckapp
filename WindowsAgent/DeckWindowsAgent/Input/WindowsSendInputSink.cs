@@ -117,7 +117,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         if (isDown && _heldKeys.Contains(key)) return;
         if (!isDown && !_heldKeys.Contains(key)) return;
         var flags = (IsExtendedKey(key) ? KeyExtended : 0) | (isDown ? 0u : KeyUp);
-        SendChecked([KeyboardInput(key, 0, flags)]);
+        SendChecked([KeyboardInput(key, '\0', flags)]);
         if (isDown)
         {
             _heldKeys.Add(key);
@@ -191,12 +191,12 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                 "left" => LeftUp,
                 "right" => RightUp,
                 "middle" => MiddleUp,
-                _ => 0
+                _ => 0u
             };
             if (flags != 0) releases.Add(MouseInput(0, 0, 0, flags));
         }
         foreach (var key in _keyPressOrder.AsEnumerable().Reverse())
-            releases.Add(KeyboardInput(key, 0, KeyUp | (IsExtendedKey(key) ? KeyExtended : 0)));
+            releases.Add(KeyboardInput(key, '\0', KeyUp | (IsExtendedKey(key) ? KeyExtended : 0)));
         if (releases.Count > 0) SendChecked([.. releases]);
         _heldMouseButtons.Clear();
         _heldKeys.Clear();

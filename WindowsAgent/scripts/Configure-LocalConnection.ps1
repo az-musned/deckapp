@@ -23,14 +23,14 @@ function Test-PrivateIPv4Address {
         -or ($bytes[0] -eq 169 -and $bytes[1] -eq 254)
 }
 
-$localAddresses = @(
+$localAddressRecords = @(
     Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
         Where-Object {
             $_.IPAddress -ne "127.0.0.1" -and
             (Test-PrivateIPv4Address -Address $_.IPAddress)
-        } |
-        Select-Object -ExpandProperty IPAddress -Unique
+        }
 )
+$localAddresses = @($localAddressRecords | Select-Object -ExpandProperty IPAddress -Unique)
 
 if ([string]::IsNullOrWhiteSpace($BindAddress)) {
     if ($localAddresses -contains "192.168.137.1") {
@@ -49,6 +49,11 @@ if (-not (Test-PrivateIPv4Address -Address $BindAddress)) {
 if ($localAddresses -notcontains $BindAddress) {
     throw "BindAddress $BindAddress is not currently assigned to this PC. Start Mobile Hotspot first and run this script again."
 }
+$bindAddressRecords = @($localAddressRecords | Where-Object { $_.IPAddress -eq $BindAddress })
+if ($bindAddressRecords.Count -ne 1) {
+    throw "BindAddress $BindAddress must identify exactly one active Windows interface."
+}
+$bindInterfaceAlias = $bindAddressRecords[0].InterfaceAlias
 
 if (-not $SkipFirewall) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -89,6 +94,25 @@ if ($null -eq $rootCertificate) {
         -TextExtension @("2.5.29.19={critical}{text}ca=1&pathlength=0")
 }
 
+$rootPrivateKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($rootCertificate)
+try {
+    if ($null -eq $rootPrivateKey -or
+        ($rootPrivateKey.Key.ExportPolicy -band [System.Security.Cryptography.CngExportPolicies]::AllowExport) -ne 0 -or
+        ($rootPrivateKey.Key.ExportPolicy -band [System.Security.Cryptography.CngExportPolicies]::AllowPlaintextExport) -ne 0) {
+        throw "The local root certificate private key is missing or exportable. Refusing to continue."
+    }
+} finally {
+    if ($null -ne $rootPrivateKey) { $rootPrivateKey.Dispose() }
+}
+
+Export-Certificate -Cert $rootCertificate -FilePath $rootExportPath -Force | Out-Null
+$trustedRoot = Get-ChildItem Cert:\CurrentUser\Root |
+    Where-Object { $_.Thumbprint -eq $rootCertificate.Thumbprint } |
+    Select-Object -First 1
+if ($null -eq $trustedRoot) {
+    Import-Certificate -FilePath $rootExportPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+}
+
 $serverCertificate = New-SelfSignedCertificate `
     -Type Custom `
     -Subject "CN=$dnsName" `
@@ -106,7 +130,37 @@ $serverCertificate = New-SelfSignedCertificate `
         "2.5.29.19={critical}{text}ca=0"
     )
 
-Export-Certificate -Cert $rootCertificate -FilePath $rootExportPath -Force | Out-Null
+$serverPrivateKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($serverCertificate)
+try {
+    if ($null -eq $serverPrivateKey -or
+        ($serverPrivateKey.Key.ExportPolicy -band [System.Security.Cryptography.CngExportPolicies]::AllowExport) -ne 0 -or
+        ($serverPrivateKey.Key.ExportPolicy -band [System.Security.Cryptography.CngExportPolicies]::AllowPlaintextExport) -ne 0) {
+        throw "The server certificate private key is missing or exportable. Refusing to continue."
+    }
+} finally {
+    if ($null -ne $serverPrivateKey) { $serverPrivateKey.Dispose() }
+}
+
+$serverSan = ($serverCertificate.Extensions |
+    Where-Object { $_.Oid.Value -eq "2.5.29.17" } |
+    Select-Object -First 1).Format($false)
+if ($serverSan -notmatch [regex]::Escape($BindAddress)) {
+    throw "The generated server certificate SAN does not contain $BindAddress."
+}
+
+$certificateStore = [System.Security.Cryptography.X509Certificates.X509Store]::new("My", "CurrentUser")
+$certificateStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+try {
+    $validMatches = $certificateStore.Certificates.Find(
+        [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+        $serverCertificate.Thumbprint,
+        $true)
+    if ($validMatches.Count -ne 1 -or -not $validMatches[0].HasPrivateKey) {
+        throw "The generated server certificate failed strict trusted-chain validation."
+    }
+} finally {
+    $certificateStore.Close()
+}
 
 $settings = [ordered]@{
     Agent = [ordered]@{
@@ -121,7 +175,11 @@ $settings | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $settingsPath -En
 
 if (-not $SkipFirewall) {
     $ruleName = "Deck Windows Agent Local $BindAddress`:$Port"
-    if ($null -eq (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+    $existingRules = @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
+    if ($existingRules.Count -gt 1) {
+        throw "More than one firewall rule named '$ruleName' exists. Refusing to choose one automatically."
+    }
+    if ($existingRules.Count -eq 0) {
         New-NetFirewallRule `
             -DisplayName $ruleName `
             -Description "Deck Agent input, limited to this private interface and local subnet." `
@@ -132,13 +190,30 @@ if (-not $SkipFirewall) {
             -LocalPort $Port `
             -RemoteAddress LocalSubnet `
             -Profile Any `
+            -InterfaceAlias ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias)) `
             -EdgeTraversalPolicy Block | Out-Null
+    }
+
+    $firewallRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction Stop
+    $portFilter = $firewallRule | Get-NetFirewallPortFilter
+    $addressFilter = $firewallRule | Get-NetFirewallAddressFilter
+    $interfaceFilter = $firewallRule | Get-NetFirewallInterfaceFilter
+    if ($firewallRule.Enabled.ToString() -ne "True" -or
+        $firewallRule.Direction.ToString() -ne "Inbound" -or
+        $firewallRule.Action.ToString() -ne "Allow" -or
+        $portFilter.Protocol -ne "TCP" -or
+        $portFilter.LocalPort -ne $Port.ToString() -or
+        $addressFilter.LocalAddress -notcontains $BindAddress -or
+        $addressFilter.RemoteAddress -notcontains "LocalSubnet" -or
+        $interfaceFilter.InterfaceAlias -notcontains ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias))) {
+        throw "The firewall rule exists but does not match the required local-only scope."
     }
 }
 
 Write-Host ""
 Write-Host "Local Windows Agent configured successfully." -ForegroundColor Green
 Write-Host "iPad Agent address: https://$BindAddress`:$Port"
+Write-Host "Windows interface: $bindInterfaceAlias"
 Write-Host "Install this public root certificate on the iPad: $rootExportPath"
 Write-Host "Then enable it under Settings > General > About > Certificate Trust Settings."
 Write-Host "The private certificate key remains non-exportable in the Windows certificate store."

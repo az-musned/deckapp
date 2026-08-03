@@ -34,4 +34,4 @@ Press `I` locally to enable/disable remote input, `E` for emergency disable, `P`
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
 
-`appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate and restricts its firewall rule to the selected private interface and `LocalSubnet`.
+`appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate, trusts that root for the current Windows user so the Agent's strict certificate lookup succeeds, verifies the server IP SAN and non-exportable private keys, and restricts its firewall rule to the selected private address, its exact Windows interface, and `LocalSubnet`. Windows Mobile Hotspot interfaces do not expose a normal NLA profile, so the rule applies across profiles but cannot match another interface or address; it does not create router forwarding or allow non-local peers.
