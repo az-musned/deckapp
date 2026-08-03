@@ -21,6 +21,20 @@ final class RemoteInputController {
     var usesMockAgent = true
     var windowsAgentAddress = "https://127.0.0.1:8732"
 
+    var windowsAgentAddressIsValid: Bool {
+        usesMockAgent || (try? WindowsAgentEndpoint(windowsAgentAddress)) != nil
+    }
+
+    var windowsAgentAddressStatus: String {
+        guard !usesMockAgent else { return "Deterministic in-app development service" }
+        do {
+            let endpoint = try WindowsAgentEndpoint(windowsAgentAddress)
+            return "\(endpoint.route.rawValue) · HTTPS/WSS · \(endpoint.displayAddress)"
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     private var service: any WindowsRemoteInputServing = MockWindowsRemoteInputService()
     private let defaults: UserDefaults
     private let preferencesKey = "windowsRemote.inputPreferences.v1"
@@ -58,6 +72,15 @@ final class RemoteInputController {
     func applyAgentConfiguration() async {
         await disconnect()
         windowsAgentAddress = windowsAgentAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !usesMockAgent, (try? WindowsAgentEndpoint(windowsAgentAddress)) == nil {
+            pairingState = .unpaired
+            securityState = WindowsAgentSecurityState(remoteInputAllowed: false, inputInjectionAvailable: false, emergencyInputDisabled: false)
+            capabilitySnapshot = nil
+            pairingMessage = windowsAgentAddressStatus
+            connectionState = .unavailable(windowsAgentAddressStatus)
+            savePreferences()
+            return
+        }
         service = usesMockAgent
             ? MockWindowsRemoteInputService()
             : WindowsAgentClient(address: windowsAgentAddress, defaults: defaults)

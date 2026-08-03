@@ -38,11 +38,6 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         let serverTimestampMilliseconds: Int64
     }
 
-    private struct InputBatch: Encodable {
-        let protocolVersion: Int
-        let events: [RemoteInputEvent]
-    }
-
     private struct InputAcknowledgement: Decodable {
         let lastAcceptedSequence: UInt64
         let appliedCount: Int
@@ -102,7 +97,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             let security = try await fetchSecurityState()
             let agent = PairedWindowsAgent(
                 id: UUID(),
-                displayName: try baseURL().host ?? "Windows PC",
+                displayName: try endpoint().baseURL.host ?? "Windows PC",
                 pairedAt: .now,
                 protocolVersion: security.protocolVersion
             )
@@ -193,7 +188,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         guard let credentialToken else { throw WindowsRemoteInputError.unpairedClient }
 
         await disconnect()
-        var request = URLRequest(url: try endpointURL(path: "/api/v1/agent/input", webSocket: true))
+        var request = URLRequest(url: try endpoint().url(path: "/api/v1/agent/input", webSocket: true))
         request.setValue("Bearer \(credentialToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let socket = session.webSocketTask(with: request)
@@ -213,7 +208,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             return RemoteAgentSession(
                 sessionID: hello.sessionId,
                 protocolVersion: hello.protocolVersion,
-                route: try connectionRoute(),
+                route: try endpoint().route,
                 latencyMilliseconds: latency,
                 remoteInputAllowed: true,
                 authenticated: true
@@ -227,7 +222,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     func send(_ events: [RemoteInputEvent]) async throws {
         guard !events.isEmpty else { return }
         guard let socket = webSocket, socket.state == .running else { throw WindowsRemoteInputError.disconnected }
-        let data = try JSONEncoder().encode(InputBatch(protocolVersion: protocolVersion, events: events))
+        let data = try JSONEncoder().encode(WindowsAgentInputBatch(protocolVersion: protocolVersion, events: events))
         guard let text = String(data: data, encoding: .utf8) else { throw WindowsRemoteInputError.invalidResponse }
         if let sequence = events.map(\.sequence).max() { pendingAcknowledgements[sequence] = .now }
         try await socket.send(.string(text))
@@ -317,7 +312,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         body: Data?,
         authenticated: Bool
     ) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: try endpointURL(path: path))
+        var request = URLRequest(url: try endpoint().url(path: path))
         request.httpMethod = method
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -336,34 +331,9 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         }
     }
 
-    private func endpointURL(path: String, webSocket: Bool = false) throws -> URL {
-        var components = URLComponents(url: try baseURL(), resolvingAgainstBaseURL: false)
-        components?.scheme = webSocket ? "wss" : "https"
-        let basePath = components?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
-        components?.path = "/" + [basePath, path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
-            .filter { !$0.isEmpty }
-            .joined(separator: "/")
-        components?.query = nil
-        components?.fragment = nil
-        guard let url = components?.url else { throw WindowsRemoteInputError.invalidAddress }
-        return url
-    }
-
-    private func baseURL() throws -> URL {
-        guard let url = URL(string: address),
-              url.scheme?.lowercased() == "https",
-              url.host != nil,
-              url.user == nil,
-              url.password == nil else {
-            throw WindowsRemoteInputError.invalidAddress
-        }
-        return url
-    }
-
-    private func connectionRoute() throws -> RemoteConnectionRoute {
-        let host = try baseURL().host?.lowercased() ?? ""
-        if host.hasSuffix(".ts.net") || Self.isTailscaleIPv4(host) { return .vpn }
-        return .local
+    private func endpoint() throws -> WindowsAgentEndpoint {
+        do { return try WindowsAgentEndpoint(address) }
+        catch { throw WindowsRemoteInputError.invalidAddress }
     }
 
     private func decode<T: Decodable>(_ message: URLSessionWebSocketTask.Message) throws -> T {
@@ -386,8 +356,4 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         throw WindowsRemoteInputError.invalidResponse
     }
 
-    nonisolated private static func isTailscaleIPv4(_ host: String) -> Bool {
-        let parts = host.split(separator: ".").compactMap { Int($0) }
-        return parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1])
-    }
 }

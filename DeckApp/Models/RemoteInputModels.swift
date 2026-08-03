@@ -273,6 +273,99 @@ struct RemoteAgentSession: Codable, Sendable, Equatable {
     let authenticated: Bool
 }
 
+nonisolated enum WindowsAgentEndpointError: LocalizedError, Sendable, Equatable {
+    case invalidAddress
+    case requiresHTTPS
+    case containsCredentials
+    case loopbackAddress
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidAddress: "Enter a valid Windows Agent address, including its hostname or IP address."
+        case .requiresHTTPS: "The Windows Agent address must use HTTPS."
+        case .containsCredentials: "Do not place credentials, query parameters, or fragments in the Agent address."
+        case .loopbackAddress: "A loopback address points back to this iPhone or iPad, not to the Windows PC."
+        }
+    }
+}
+
+nonisolated struct WindowsAgentEndpoint: Sendable, Equatable {
+    let baseURL: URL
+    let route: RemoteConnectionRoute
+    let displayAddress: String
+
+    init(_ address: String) throws {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else {
+            throw WindowsAgentEndpointError.invalidAddress
+        }
+        guard scheme == "https" else { throw WindowsAgentEndpointError.requiresHTTPS }
+        guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            throw WindowsAgentEndpointError.containsCredentials
+        }
+        guard host != "localhost", host != "::1", !host.hasPrefix("127.") else {
+            throw WindowsAgentEndpointError.loopbackAddress
+        }
+
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.scheme = "https"
+        components?.query = nil
+        components?.fragment = nil
+        guard let normalizedURL = components?.url else { throw WindowsAgentEndpointError.invalidAddress }
+
+        baseURL = normalizedURL
+        route = Self.route(for: host)
+        displayAddress = url.port.map { "\(host):\($0)" } ?? host
+    }
+
+    func url(path: String, webSocket: Bool = false) throws -> URL {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.scheme = webSocket ? "wss" : "https"
+        let basePath = components?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+        components?.path = "/" + [basePath, path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
+            .filter { !$0.isEmpty }
+            .joined(separator: "/")
+        guard let endpoint = components?.url else { throw WindowsAgentEndpointError.invalidAddress }
+        return endpoint
+    }
+
+    private static func route(for host: String) -> RemoteConnectionRoute {
+        if host.hasSuffix(".ts.net") || isTailscaleIPv4(host) { return .vpn }
+        if host.hasSuffix(".local") || isPrivateIPv4(host) || isPrivateIPv6(host) { return .local }
+        return .remote
+    }
+
+    private static func ipv4Parts(_ host: String) -> [Int]? {
+        let pieces = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard pieces.count == 4 else { return nil }
+        let values = pieces.compactMap { Int($0) }
+        guard values.count == 4, values.allSatisfy({ (0...255).contains($0) }) else { return nil }
+        return values
+    }
+
+    private static func isPrivateIPv4(_ host: String) -> Bool {
+        guard let parts = ipv4Parts(host) else { return false }
+        return parts[0] == 10
+            || (parts[0] == 172 && (16...31).contains(parts[1]))
+            || (parts[0] == 192 && parts[1] == 168)
+            || (parts[0] == 169 && parts[1] == 254)
+    }
+
+    private static func isTailscaleIPv4(_ host: String) -> Bool {
+        guard let parts = ipv4Parts(host) else { return false }
+        return parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    private static func isPrivateIPv6(_ host: String) -> Bool {
+        host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe8") || host.hasPrefix("fe9")
+    }
+}
+
+nonisolated struct WindowsAgentInputBatch: Codable, Sendable {
+    let protocolVersion: Int
+    let events: [RemoteInputEvent]
+}
+
 nonisolated enum WindowsAgentPairingState: Codable, Sendable, Equatable {
     case unknown
     case unpaired

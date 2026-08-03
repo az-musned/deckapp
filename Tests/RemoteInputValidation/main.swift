@@ -30,6 +30,49 @@ struct RemoteInputValidation {
         let decodedArabic = try JSONDecoder().decode(RemoteInputPayload.self, from: encoded)
         precondition(decodedArabic == arabic)
 
+        let localEndpoint = try WindowsAgentEndpoint("https://192.168.137.1:8732")
+        precondition(localEndpoint.route == .local)
+        let inputEndpoint = try localEndpoint.url(path: "/api/v1/agent/input", webSocket: true)
+        let vpnEndpoint = try WindowsAgentEndpoint("https://100.90.1.2:8732")
+        let remoteEndpoint = try WindowsAgentEndpoint("https://pc.example.com:8732")
+        precondition(inputEndpoint.absoluteString == "wss://192.168.137.1:8732/api/v1/agent/input")
+        precondition(vpnEndpoint.route == .vpn)
+        precondition(remoteEndpoint.route == .remote)
+        do {
+            _ = try WindowsAgentEndpoint("http://192.168.137.1:8732")
+            preconditionFailure("Insecure Windows Agent endpoint was accepted")
+        } catch WindowsAgentEndpointError.requiresHTTPS {
+            // Expected.
+        }
+        do {
+            _ = try WindowsAgentEndpoint("https://127.0.0.1:8732")
+            preconditionFailure("iPad loopback endpoint was accepted as a PC")
+        } catch WindowsAgentEndpointError.loopbackAddress {
+            // Expected.
+        }
+        do {
+            _ = try WindowsAgentEndpoint("https://user:secret@192.168.137.1:8732")
+            preconditionFailure("Credentials were accepted inside an Agent URL")
+        } catch WindowsAgentEndpointError.containsCredentials {
+            // Expected.
+        }
+
+        let wireEvent = RemoteInputEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            sequence: 42,
+            timestampMilliseconds: 1_785_776_400_000,
+            payload: .mouseButton(.right, isDown: false)
+        )
+        let wireData = try JSONEncoder().encode(WindowsAgentInputBatch(protocolVersion: 1, events: [wireEvent]))
+        let wireJSON = try JSONSerialization.jsonObject(with: wireData) as? [String: Any]
+        let wireEvents = wireJSON?["events"] as? [[String: Any]]
+        let wirePayload = wireEvents?.first?["payload"] as? [String: Any]
+        let wireButton = wirePayload?["mouseButton"] as? [String: Any]
+        precondition(wireJSON?["protocolVersion"] as? Int == 1)
+        precondition(wireEvents?.first?["sequence"] as? Int == 42)
+        precondition(wireButton?["_0"] as? String == "right")
+        precondition(wireButton?["isDown"] as? Bool == false)
+
         var held = HeldRemoteInputState(modifiers: [.control, .shift], mouseButtons: [.left])
         precondition(held.releaseAll() == .releaseAll)
         precondition(held.modifiers.isEmpty && held.mouseButtons.isEmpty)

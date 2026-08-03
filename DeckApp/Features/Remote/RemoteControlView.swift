@@ -591,9 +591,14 @@ private struct RemoteInputSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    Label(remote.windowsAgentAddressStatus, systemImage: remote.windowsAgentAddressIsValid ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(remote.windowsAgentAddressIsValid ? DesignToken.Color.positive : DesignToken.Color.destructive)
+
                     Button("Apply and Refresh") {
                         Task { await remote.applyAgentConfiguration() }
                     }
+                    .disabled(!remote.windowsAgentAddressIsValid)
                 }
                 Section("Pointer") {
                     LabeledContent("Sensitivity", value: remote.preferences.pointerSensitivity.formatted(.number.precision(.fractionLength(1))))

@@ -6,6 +6,8 @@ DeckApp contains the iPhone/iPad Remote UI, input-event model, coalescing and sa
 
 The live address must use `https://`; its certificate must be trusted by iOS/iPadOS and match the configured hostname or IP address. DeckApp uses normal system TLS validation and contains no trust-all delegate or certificate-validation bypass.
 
+Before applying an address, DeckApp rejects HTTP, loopback destinations, URLs containing username/password fields, query parameters, and fragments. The diagnostics label RFC1918, link-local, `.local`, Tailscale `100.64.0.0/10`, and `.ts.net` routes without exposing credentials. Contract validation also asserts the exact synthesized Swift enum JSON consumed by the Windows parser.
+
 The mock now exercises an explicit pairing challenge, invalid-code rejection, a Keychain-stored credential, pairing revocation, the Windows-side Allow Remote Input permission, input-injection availability, and an emergency Disable Input state. Its development-only pairing code is `482913`. The production Agent must generate its own short-lived codes and credentials.
 
 High-frequency input never uses Bitfocus Companion or Home Assistant. The production implementation belongs to the separately built Windows Control Agent.
