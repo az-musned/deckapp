@@ -19,6 +19,8 @@ public static class InputWebSocketEndpoint
 
     private static async Task HandleAsync(HttpContext context)
     {
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("DeckWindowsAgent.InputWebSocket");
         var pairing = context.RequestServices.GetRequiredService<PairingService>();
         var safety = context.RequestServices.GetRequiredService<AgentSafetyState>();
         var sink = context.RequestServices.GetRequiredService<IWindowsInputSink>();
@@ -40,10 +42,12 @@ public static class InputWebSocketEndpoint
         }
 
         WebSocket? socket = null;
+        var endReason = "request ended";
         try
         {
             socket = await context.WebSockets.AcceptWebSocketAsync();
             sessions.Attach(sessionId, socket);
+            logger.LogInformation("Input session {SessionId} opened.", sessionId);
             var processor = new InputBatchProcessor(sink);
             await SendJsonAsync(socket, new InputSessionHello(
                 sessionId,
@@ -55,12 +59,17 @@ public static class InputWebSocketEndpoint
             {
                 if (!safety.RemoteInputAllowed || safety.EmergencyInputDisabled)
                 {
+                    endReason = "Windows safety state disabled input";
                     await socket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, "Input disabled on Windows.", CancellationToken.None);
                     break;
                 }
 
                 var message = await ReceiveMessageAsync(socket, context.RequestAborted);
-                if (message is null) break;
+                if (message is null)
+                {
+                    endReason = "client sent a WebSocket close frame";
+                    break;
+                }
 
                 try
                 {
@@ -71,18 +80,21 @@ public static class InputWebSocketEndpoint
                 }
                 catch (InputInjectionException)
                 {
+                    endReason = "Windows rejected input injection";
                     await SendJsonAsync(socket, new InputProtocolError("unavailable", "Windows rejected input injection."), CancellationToken.None);
                     await socket.CloseOutputAsync(WebSocketCloseStatus.InternalServerError, "Input unavailable.", CancellationToken.None);
                     break;
                 }
                 catch (JsonException)
                 {
+                    endReason = "client sent invalid JSON input";
                     await SendJsonAsync(socket, new InputProtocolError("failed", "Invalid input message."), CancellationToken.None);
                     await socket.CloseOutputAsync(WebSocketCloseStatus.InvalidPayloadData, "Invalid input message.", CancellationToken.None);
                     break;
                 }
                 catch (InvalidOperationException)
                 {
+                    endReason = "client violated the input protocol";
                     await SendJsonAsync(socket, new InputProtocolError("failed", "Input protocol violation."), CancellationToken.None);
                     await socket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, "Protocol violation.", CancellationToken.None);
                     break;
@@ -92,11 +104,21 @@ public static class InputWebSocketEndpoint
             if (socket.State == WebSocketState.CloseReceived)
                 await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Closed.", CancellationToken.None);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            endReason = "HTTP request was aborted";
+        }
+        catch (WebSocketException error)
+        {
+            endReason = "WebSocket transport failed";
+            logger.LogWarning(error, "Input session {SessionId} WebSocket transport failed.", sessionId);
+        }
         finally
         {
             await sink.ReleaseAllAsync(CancellationToken.None);
             sessions.End(sessionId);
             socket?.Dispose();
+            logger.LogInformation("Input session {SessionId} ended: {EndReason}. Held input was released.", sessionId, endReason);
         }
     }
 
@@ -128,6 +150,6 @@ public static class InputWebSocketEndpoint
     private static Task SendJsonAsync<T>(WebSocket socket, T value, CancellationToken cancellationToken)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-        return socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken).AsTask();
+        return socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
     }
 }

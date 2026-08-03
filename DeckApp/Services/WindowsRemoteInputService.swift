@@ -11,6 +11,7 @@ protocol WindowsRemoteInputServing: Sendable {
     func perform(_ command: WindowsAgentCapabilityCommand) async throws -> WindowsAgentCommandResult
     func connect() async throws -> RemoteAgentSession
     func isConnected() async -> Bool
+    func currentLatencyMilliseconds() async -> Int?
     func send(_ events: [RemoteInputEvent]) async throws
     func disconnect() async
 }
@@ -248,6 +249,8 @@ actor MockWindowsRemoteInputService: WindowsRemoteInputServing {
     }
 
     func isConnected() async -> Bool { connected }
+
+    func currentLatencyMilliseconds() async -> Int? { latencyMilliseconds }
 
     func send(_ events: [RemoteInputEvent]) async throws {
         guard connected else { throw WindowsRemoteInputError.disconnected }

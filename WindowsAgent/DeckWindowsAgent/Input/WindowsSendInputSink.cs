@@ -191,7 +191,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                 "left" => LeftUp,
                 "right" => RightUp,
                 "middle" => MiddleUp,
-                _ => 0
+                _ => 0u
             };
             if (flags != 0) releases.Add(MouseInput(0, 0, 0, flags));
         }
@@ -250,7 +250,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         if (sent != inputs.Length) throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
-    private static NativeInput KeyboardInput(ushort virtualKey, char scanCode, uint flags) => new()
+    private static NativeInput KeyboardInput(ushort virtualKey, ushort scanCode, uint flags) => new()
     {
         Type = InputKeyboard,
         Union = new InputUnion { Keyboard = new KeyboardInputData { VirtualKey = virtualKey, ScanCode = scanCode, Flags = flags } }

@@ -168,7 +168,14 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     }
 
     func securityState() async -> WindowsAgentSecurityState {
-        if let response = try? await fetchSecurityState() { return response.state }
+        for attempt in 0..<3 {
+            do {
+                return (try await fetchSecurityState()).state
+            } catch {
+                guard attempt < 2 else { break }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
         return WindowsAgentSecurityState(
             remoteInputAllowed: false,
             inputInjectionAvailable: false,
@@ -235,6 +242,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
 
     func isConnected() async -> Bool {
         webSocket?.state == .running
+    }
+
+    func currentLatencyMilliseconds() async -> Int? {
+        measuredLatencyMilliseconds
     }
 
     func disconnect() async {
