@@ -32,8 +32,11 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
         twoFingerTap.numberOfTouchesRequired = 2
 
         let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.longPress(_:)))
-        longPress.minimumPressDuration = 0.3
-        longPress.allowableMovement = 10_000
+        // Dragging should require a deliberate stationary hold. A short hold
+        // with unlimited movement turns ordinary pointer motion into text
+        // selection and accidental drags.
+        longPress.minimumPressDuration = 0.7
+        longPress.allowableMovement = 14
 
         tap.require(toFail: pointerPan)
         twoFingerTap.require(toFail: scrollPan)
