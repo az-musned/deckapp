@@ -237,6 +237,15 @@ final class RemoteInputController {
             await disconnect()
             connectionState = .unavailable("Windows input injection is unavailable in the current desktop state.")
             lastInteraction = "Windows desktop unavailable"
+        } else if let latency = await service.currentLatencyMilliseconds() {
+            switch connectionState {
+            case .connected(let route, _), .highLatency(let route, _):
+                connectionState = latency >= 80
+                    ? .highLatency(route: route, latencyMilliseconds: latency)
+                    : .connected(route: route, latencyMilliseconds: latency)
+            default:
+                break
+            }
         }
     }
 
