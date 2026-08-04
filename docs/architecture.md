@@ -52,13 +52,13 @@ The adaptive Scenes feature discovers Home Assistant `scene.*` and `script.*` en
 
 Home Assistant is the primary backend for Govee, Gree, Smart Life/Tuya, LG webOS, and smart-room scenes. It is not Apple Home or HomeKit. No direct vendor cloud API belongs in the initial implementation.
 
-## 8. Proposed future Windows Agent boundaries
+## 8. Windows Agent boundaries
 
-`WindowsAgentServiceProtocol` will expose pairing/connection state, PC state, applications/games, Windows audio devices and sessions, GoXLR channels, media sessions, system telemetry, and discrete commands. Configuration/query operations use authenticated request-response calls; live state uses one authenticated event channel.
+The Windows Agent exposes pairing/connection state, applications/games, Windows audio sessions, GoXLR channels, and discrete commands. Capability query/command operations use paired HTTPS calls; live remote input uses one authenticated WebSocket. Media sessions and system telemetry remain future work.
 
 The Windows Agent exposes capabilities and confirmed state rather than virtual Companion coordinates. Companion continues handling existing macros, scripts, OBS workflows, and already-configured multi-actions until deliberately migrated.
 
-The iOS Remote foundation now defines `WindowsRemoteInputServing`, versioned authenticated session state, explicit pairing challenges, Keychain credential restoration and revocation, coalesced relative-pointer/scroll events, immediate keyboard/button events, held-input safety state, and an authenticated mock transport. Windows-owned Allow Remote Input, injection availability, and emergency Disable Input states are represented but cannot be overridden by iOS. A mock capability snapshot and command contract establish application/game, Windows audio-session, and GoXLR channel controls. Each command progresses through pending/running and becomes confirmed only after the Agent returns updated state. Capability commands require pairing but remain independent from the remote-input permission. The production Agent remains a separate implementation and must use supported Windows input APIs without bypassing Windows security boundaries. See [PC keyboard and touchpad remote](remote-input.md).
+The iOS Remote foundation defines `WindowsRemoteInputServing`, versioned authenticated session state, explicit pairing challenges, Keychain credential restoration and revocation, coalesced relative-pointer/scroll events, immediate keyboard/button events, held-input safety state, and live/mock transports. Windows-owned Allow Remote Input, injection availability, and emergency Disable Input states are represented but cannot be overridden by iOS. Production capability snapshot and command endpoints provide application/game, Windows audio-session, and GoXLR channel controls. Each command progresses through pending/running and becomes confirmed only after the Agent returns updated state. Capability commands require pairing but remain independent from remote-input permission. See [PC keyboard and touchpad remote](remote-input.md).
 
 ## 9. Proposed folder structure
 
@@ -110,7 +110,7 @@ The physical project can migrate toward this layout incrementally; file-system-s
 
 Phase 7 has begun with a separate .NET 10 Windows project. It enforces HTTPS and explicit private-interface binding, generates short-lived attempt-limited pairing challenges, stores only credential hashes, supports local and authenticated self-revocation, and defaults Allow Remote Input to off. Its authenticated single-client WebSocket accepts bounded Swift-compatible event batches, rejects sequence replays, calibrates clock offset, coalesces motion, drops stale input safely, and guarantees held-input cleanup. Ordinary keyboard, Unicode, relative pointer, button, and scroll injection uses `SendInput` only on the normal Windows `Default` input desktop.
 
-The iOS production transport now implements HTTPS pairing/security requests, separate live/mock Keychain accounts, authenticated WSS input batches, acknowledgement latency, and connected-session safety polling. The development mock remains selectable. Explicit clipboard transfer and real application/audio/GoXLR endpoints remain future Phase 7 slices.
+The iOS production transport implements HTTPS pairing/security and capability requests, separate live/mock Keychain accounts, authenticated WSS input batches, acknowledgement latency, and connected-session safety polling. The development mock remains selectable. Explicit clipboard transfer remains a future Phase 7 slice.
 
 ## 12. Risks and missing information
 
@@ -118,6 +118,6 @@ The iOS production transport now implements HTTPS pairing/security requests, sep
 - Actual Govee, Gree, LG webOS, and Tuya entity capabilities depend on their Home Assistant integrations and device models.
 - The Smart Life plug boot delay, PC reachability signal, and safe administrative power-off policy need configuration.
 - The LG television wake method and remote/entity arrangement are model-specific.
-- GoXLR and Windows audio schemas depend on the future Agent protocol.
+- GoXLR availability depends on GoXLR Utility already managing the device; the Agent does not take ownership from another manager.
 - HTTP acceptance from Companion cannot prove macro completion without a separate state source.
 - Phase 1 mock controls demonstrate lifecycle and layout, but must not be presented as real device state.

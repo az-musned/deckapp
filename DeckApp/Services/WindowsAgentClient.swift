@@ -51,6 +51,37 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         let message: String
     }
 
+    private struct CapabilitySnapshotDTO: Decodable {
+        let applications: [WindowsAgentApplication]
+        let audioSessions: [WindowsAudioSessionState]
+        let goXlrChannels: [WindowsGoXLRChannelState]
+        let goXlrConnected: Bool
+        let protocolVersion: Int
+
+        var snapshot: WindowsAgentCapabilitySnapshot {
+            WindowsAgentCapabilitySnapshot(
+                applications: applications,
+                audioSessions: audioSessions,
+                goXLRChannels: goXlrChannels,
+                goXLRConnected: goXlrConnected
+            )
+        }
+    }
+
+    private struct CapabilityCommandBody: Encodable {
+        let command: String
+        let id: String
+        let value: Double?
+        let muted: Bool?
+    }
+
+    private struct CapabilityCommandResultDTO: Decodable {
+        let confirmed: Bool
+        let message: String
+        let snapshot: CapabilitySnapshotDTO
+        let protocolVersion: Int
+    }
+
     private let protocolVersion = 1
     private let address: String
     private let requestSession: URLSession
@@ -196,11 +227,47 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     }
 
     func capabilitySnapshot() async -> WindowsAgentCapabilitySnapshot {
-        WindowsAgentCapabilitySnapshot(applications: [], audioSessions: [], goXLRChannels: [], goXLRConnected: false)
+        do {
+            let response: CapabilitySnapshotDTO = try await request(
+                method: "GET", path: "/api/v1/agent/capabilities", body: nil, authenticated: true
+            )
+            guard response.protocolVersion == protocolVersion else { return Self.emptyCapabilitySnapshot }
+            return response.snapshot
+        } catch {
+            return Self.emptyCapabilitySnapshot
+        }
     }
 
     func perform(_ command: WindowsAgentCapabilityCommand) async throws -> WindowsAgentCommandResult {
-        throw WindowsRemoteInputError.capabilityUnavailable
+        let body: CapabilityCommandBody
+        switch command {
+        case .launchApplication(let id):
+            body = CapabilityCommandBody(command: "launchApplication", id: id, value: nil, muted: nil)
+        case .setAudioVolume(let id, let volume):
+            body = CapabilityCommandBody(command: "setAudioVolume", id: id, value: volume, muted: nil)
+        case .setAudioMuted(let id, let muted):
+            body = CapabilityCommandBody(command: "setAudioMuted", id: id, value: nil, muted: muted)
+        case .setGoXLRLevel(let id, let level):
+            body = CapabilityCommandBody(command: "setGoXlrLevel", id: id, value: level, muted: nil)
+        case .setGoXLRMuted(let id, let muted):
+            body = CapabilityCommandBody(command: "setGoXlrMuted", id: id, value: nil, muted: muted)
+        }
+        let response: CapabilityCommandResultDTO = try await request(
+            method: "POST",
+            path: "/api/v1/agent/commands",
+            body: try JSONEncoder().encode(body),
+            authenticated: true
+        )
+        guard response.protocolVersion == protocolVersion,
+              response.snapshot.protocolVersion == protocolVersion else {
+            throw WindowsRemoteInputError.protocolMismatch
+        }
+        return WindowsAgentCommandResult(
+            command: command,
+            confirmed: response.confirmed,
+            message: response.message,
+            snapshot: response.snapshot.snapshot
+        )
     }
 
     func connect() async throws -> RemoteAgentSession {
@@ -408,7 +475,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         switch response.statusCode {
         case 200..<300: return (data, response)
         case 401: throw WindowsRemoteInputError.unpairedClient
-        case 409: throw WindowsRemoteInputError.inputInjectionUnavailable
+        case 409:
+            throw path == "/api/v1/agent/commands"
+                ? WindowsRemoteInputError.capabilityUnavailable
+                : WindowsRemoteInputError.inputInjectionUnavailable
         default: throw WindowsRemoteInputError.invalidResponse
         }
     }
@@ -436,6 +506,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         standard.formatOptions = [.withInternetDateTime]
         if let date = standard.date(from: value) { return date }
         throw WindowsRemoteInputError.invalidResponse
+    }
+
+    nonisolated private static var emptyCapabilitySnapshot: WindowsAgentCapabilitySnapshot {
+        WindowsAgentCapabilitySnapshot(applications: [], audioSessions: [], goXLRChannels: [], goXLRConnected: false)
     }
 
 }

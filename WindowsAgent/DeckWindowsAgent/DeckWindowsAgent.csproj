@@ -7,4 +7,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>DeckWindowsAgent</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeckWindowsAgent.Validation" />
+  </ItemGroup>
 </Project>

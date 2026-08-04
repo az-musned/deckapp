@@ -1,6 +1,6 @@
 # Deck Windows Agent
 
-This is the Windows-only Phase 7 Agent for DeckApp. It targets .NET 10 LTS and currently implements secure startup rules, private-network filtering, cryptographic pairing challenges, hashed credential storage, paired-device listing, independent Allow Remote Input and emergency-disable state, a persistent authenticated WebSocket, and ordinary keyboard/mouse injection through the supported Windows `SendInput` API.
+This is the Windows-only Phase 7 Agent for DeckApp. It targets .NET 10 LTS and implements secure startup rules, private-network filtering, cryptographic pairing challenges, hashed credential storage, paired-device listing, independent Allow Remote Input and emergency-disable state, a persistent authenticated WebSocket, ordinary keyboard/mouse injection through `SendInput`, and paired HTTPS capabilities for an application allowlist, Windows audio sessions, and GoXLR Utility.
 
 The iOS app can now select this live transport from Remote Settings, pair through HTTPS, and open the authenticated input WebSocket. Clipboard transfer remains disabled.
 
@@ -16,6 +16,9 @@ The iOS app can now select this live transport from Remote Settings, pair throug
 - Pointer/scroll events are coalesced, stale events and sequence replays are dropped, and releases are still accepted when their original press has become stale.
 - Every disconnect, local disable, emergency disable, and injection failure releases all logically held keys and mouse buttons.
 - Input is refused outside the normal `Default` Windows input desktop. The Agent does not bypass UAC, the lock screen, UIPI, secure desktop, elevated applications, or anti-cheat protections.
+- Application launch is limited to exact absolute `.exe` paths configured locally; requests cannot supply paths, arguments, or shell commands.
+- Capability commands require pairing but do not depend on Allow Remote Input. They are serialized and return confirmed only after state is read back.
+- GoXLR integration invokes only `goxlr-client.exe` when its daemon is already available. The Agent never starts or replaces the GoXLR device manager.
 
 ## Build on Windows
 
@@ -31,6 +34,36 @@ The iOS app can now select this live transport from Remote Settings, pair throug
 8. Run the Agent from a visible local console during development.
 
 Press `I` locally to enable/disable remote input, `E` for emergency disable, `P` to list paired devices, or `R` to revoke one. Keep the console visible during this development phase.
+
+## PC capabilities
+
+Windows audio discovery reads the active sessions on the default multimedia output endpoint. The returned IDs are opaque hashes and the Agent supports per-session volume and mute with state readback.
+
+GoXLR support uses the community [GoXLR Utility](https://github.com/GoXLR-on-Linux/goxlr-utility) client/API. If `C:\Program Files\GoXLR Utility\goxlr-client.exe` exists it is discovered automatically, or set an absolute `GoXlrClientPath`. The GoXLR Utility daemon must already be managing the device. Do not run it alongside another manager that owns the GoXLR; when unavailable, the Agent reports `goXlrConnected: false` and makes no device change. Channel levels are 0–1 on the Deck protocol and 0–100 in GoXLR Utility. Mute is exposed only for a channel assigned to a physical fader.
+
+Applications and games must be explicitly allowlisted in ignored `appsettings.Local.json`:
+
+```json
+{
+  "Agent": {
+    "Capabilities": {
+      "WindowsAudioEnabled": true,
+      "GoXlrEnabled": true,
+      "GoXlrClientPath": "",
+      "Applications": [
+        {
+          "Id": "obs",
+          "Name": "OBS Studio",
+          "Kind": "application",
+          "ExecutablePath": "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"
+        }
+      ]
+    }
+  }
+}
+```
+
+`Kind` is `application` or `game`. Re-running `Configure-LocalConnection.ps1` preserves an existing `Agent:Capabilities` section. See [protocol-v1.md](protocol-v1.md) for the wire format and [windows-agent-capabilities.md](../docs/windows-agent-capabilities.md) for the Mac/iOS handoff.
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
 

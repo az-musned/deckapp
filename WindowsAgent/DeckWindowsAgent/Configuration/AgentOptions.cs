@@ -9,6 +9,7 @@ public sealed class AgentOptions
     public string CertificateThumbprint { get; init; } = string.Empty;
     public int PairingCodeLifetimeSeconds { get; init; } = 120;
     public int MaximumPairingAttempts { get; init; } = 5;
+    public CapabilityOptions Capabilities { get; init; } = new();
 
     public void Validate()
     {
@@ -31,7 +32,47 @@ public sealed class AgentOptions
         {
             throw new InvalidOperationException("Pairing safety settings are outside their allowed ranges.");
         }
+
+        Capabilities.Validate();
     }
+}
+
+public sealed class CapabilityOptions
+{
+    public bool WindowsAudioEnabled { get; init; } = true;
+    public bool GoXlrEnabled { get; init; } = true;
+    public string GoXlrClientPath { get; init; } = string.Empty;
+    public List<ApplicationLaunchOptions> Applications { get; init; } = [];
+
+    public void Validate()
+    {
+        if (!string.IsNullOrWhiteSpace(GoXlrClientPath) && !Path.IsPathFullyQualified(GoXlrClientPath))
+            throw new InvalidOperationException("Agent:Capabilities:GoXlrClientPath must be an absolute path.");
+
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var application in Applications)
+        {
+            if (application.Id.Length is < 1 or > 64 || application.Id.Any(character =>
+                    !(char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-')))
+                throw new InvalidOperationException("Application IDs may contain only ASCII letters, digits, dot, underscore, and hyphen.");
+            if (!ids.Add(application.Id)) throw new InvalidOperationException($"Duplicate application ID '{application.Id}'.");
+            if (string.IsNullOrWhiteSpace(application.Name) || application.Name.Length > 100)
+                throw new InvalidOperationException($"Application '{application.Id}' needs a name of at most 100 characters.");
+            if (!Path.IsPathFullyQualified(application.ExecutablePath) ||
+                !string.Equals(Path.GetExtension(application.ExecutablePath), ".exe", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Application '{application.Id}' must point to an absolute .exe path.");
+            if (application.Kind is not ("application" or "game"))
+                throw new InvalidOperationException($"Application '{application.Id}' kind must be 'application' or 'game'.");
+        }
+    }
+}
+
+public sealed class ApplicationLaunchOptions
+{
+    public string Id { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string Kind { get; init; } = "application";
+    public string ExecutablePath { get; init; } = string.Empty;
 }
 
 public static class PrivateNetworkGuard

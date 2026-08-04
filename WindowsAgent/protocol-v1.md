@@ -48,6 +48,44 @@ Authenticated requests use `Authorization: Bearer <credential>`. Invalid or revo
 
 Allow Remote Input is independent from other Agent capabilities. Emergency disable overrides it. Both are Windows-owned state and cannot be enabled remotely by iOS.
 
+## PC capability endpoints
+
+Capability requests require the same paired bearer credential as security and input requests, but they are deliberately independent from `remoteInputAllowed`. This keeps remote-input permission separate from other present and future Agent capabilities.
+
+`GET /api/v1/agent/capabilities` returns current state:
+
+```json
+{
+  "applications": [
+    { "id": "obs", "name": "OBS Studio", "kind": "application", "isRunning": false }
+  ],
+  "audioSessions": [
+    { "id": "audio-opaque-hash", "name": "Spotify", "volume": 0.72, "isMuted": false }
+  ],
+  "goXlrChannels": [
+    { "id": "mic", "name": "Mic", "level": 0.64, "isMuted": false }
+  ],
+  "goXlrConnected": true,
+  "protocolVersion": 1
+}
+```
+
+Application IDs and paths originate only from the Windows-local allowlist. Audio IDs are opaque hashes scoped to the current Windows audio session. GoXLR IDs are normalized channel names such as `mic`, `game`, `chat`, `music`, and `system`. Volume and level values are finite numbers from 0 through 1.
+
+`POST /api/v1/agent/commands` accepts exactly one of these command shapes:
+
+```json
+{ "command": "launchApplication", "id": "obs" }
+{ "command": "setAudioVolume", "id": "audio-opaque-hash", "value": 0.5 }
+{ "command": "setAudioMuted", "id": "audio-opaque-hash", "muted": true }
+{ "command": "setGoXlrLevel", "id": "music", "value": 0.6 }
+{ "command": "setGoXlrMuted", "id": "mic", "muted": true }
+```
+
+Command names are case-sensitive. The spelling is `GoXlr` on the JSON wire even though the iOS domain model uses `GoXLR`. Commands are serialized server-side. A `200` response contains `confirmed`, `message`, a fresh `snapshot`, and `protocolVersion`. The client must treat the operation as successful only when `confirmed` is true and the returned snapshot matches the requested state; accepting the HTTP request alone is not confirmation. `409` means the requested target or capability is unavailable or invalid. `401` means the credential is missing, invalid, or revoked.
+
+The Agent cannot receive an executable path or arguments from the network. It does not start the GoXLR Utility daemon or switch device managers. It never logs full command bodies, typed text, credentials, or audio payloads.
+
 ## Input endpoint
 
 Connect a WebSocket to `wss://<private-agent-address>:8732/api/v1/agent/input` with the bearer credential. Only one input session is accepted. The server replies with a `ready` message containing `sessionId`, `protocolVersion`, and `serverTimestampMilliseconds`.

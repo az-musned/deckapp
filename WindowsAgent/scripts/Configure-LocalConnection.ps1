@@ -162,6 +162,19 @@ try {
     $certificateStore.Close()
 }
 
+$capabilitySettings = [ordered]@{
+    WindowsAudioEnabled = $true
+    GoXlrEnabled = $true
+    GoXlrClientPath = ""
+    Applications = @()
+}
+if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+    $existingSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    if ($null -ne $existingSettings.Agent -and $null -ne $existingSettings.Agent.Capabilities) {
+        $capabilitySettings = $existingSettings.Agent.Capabilities
+    }
+}
+
 $settings = [ordered]@{
     Agent = [ordered]@{
         BindAddress = $BindAddress
@@ -169,9 +182,10 @@ $settings = [ordered]@{
         CertificateThumbprint = $serverCertificate.Thumbprint
         PairingCodeLifetimeSeconds = 120
         MaximumPairingAttempts = 5
+        Capabilities = $capabilitySettings
     }
 }
-$settings | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+$settings | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
 if (-not $SkipFirewall) {
     $ruleName = "Deck Windows Agent Local $BindAddress`:$Port"

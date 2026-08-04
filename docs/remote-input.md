@@ -23,13 +23,13 @@ High-frequency input never uses Bitfocus Companion or Home Assistant. The produc
 - Disconnecting, leaving the active app state, or encountering a transport error clears held modifiers/buttons and stops input.
 - Typed and clipboard contents are never logged, analyzed, or persisted.
 
-## Capability contract preview
+## Capability contract
 
-The mock Agent publishes sample applications/games, Windows audio sessions, and GoXLR connection/channel state. The Remote Media screen can launch a sample application, change per-session volume/mute, and change GoXLR level/mute. These development controls expose pending and running feedback, then report confirmed only after the mock Agent returns the matching updated state.
+The production Windows Agent and mock publish applications/games, Windows audio sessions, and GoXLR connection/channel state. The Remote Media screen can launch an allowlisted application, change per-session volume/mute, and change GoXLR level/mute. These controls expose pending and running feedback, then report confirmed only after the Agent returns updated state.
 
 Capability commands require a paired client but remain independent from the separate Allow Remote Input permission. Disabling keyboard/touchpad access therefore does not disable non-input Agent capabilities. An accepted request is not sufficient evidence that an application launched, a mixer value changed, or a PC command completed.
 
-## Future Windows Agent implementation
+## Windows Agent implementation
 
 The Agent should use supported Windows input APIs such as `SendInput` for relative pointer motion, mouse buttons, vertical/horizontal scroll, virtual keys, Unicode text, function keys, and media keys. It must release all logical input on disconnect and clearly return an unavailable state when injection is blocked.
 

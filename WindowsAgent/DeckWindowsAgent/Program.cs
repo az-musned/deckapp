@@ -1,6 +1,8 @@
 using System.Net;
+using DeckWindowsAgent.Capabilities;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Input;
+using DeckWindowsAgent.Protocol;
 using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Security;
 using DeckWindowsAgent.Transport;
@@ -27,6 +29,10 @@ builder.Services.AddSingleton<PairingService>();
 builder.Services.AddSingleton<AgentSafetyState>();
 builder.Services.AddSingleton<InputSessionRegistry>();
 builder.Services.AddSingleton<IWindowsInputSink, WindowsSendInputSink>();
+builder.Services.AddSingleton<IApplicationCapabilityService, ApplicationCapabilityService>();
+builder.Services.AddSingleton<IWindowsAudioSessionService, WindowsAudioSessionService>();
+builder.Services.AddSingleton<IGoXlrCapabilityService, GoXlrCapabilityService>();
+builder.Services.AddSingleton<IAgentCapabilityService, AgentCapabilityService>();
 builder.Services.AddHostedService<LocalSafetyConsoleService>();
 
 var app = builder.Build();
@@ -84,6 +90,31 @@ app.MapDelete("/api/v1/agent/pairing", (HttpContext context, PairingService pair
     var device = token is null ? null : pairing.AuthenticateDevice(token);
     if (device is null) return Results.Unauthorized();
     return pairing.Revoke(device.Id) ? Results.NoContent() : Results.NotFound();
+});
+
+app.MapGet("/api/v1/agent/capabilities", async (
+    HttpContext context,
+    PairingService pairing,
+    IAgentCapabilityService capabilities,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    return Results.Ok(await capabilities.SnapshotAsync(cancellationToken));
+});
+
+app.MapPost("/api/v1/agent/commands", async (
+    HttpContext context,
+    AgentCapabilityCommandRequest request,
+    PairingService pairing,
+    IAgentCapabilityService capabilities,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    try { return Results.Ok(await capabilities.ExecuteAsync(request, cancellationToken)); }
+    catch (CapabilityUnavailableException error)
+    {
+        return Results.Json(new { error = error.Message }, statusCode: StatusCodes.Status409Conflict);
+    }
 });
 
 app.MapInputWebSocket();
