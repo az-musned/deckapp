@@ -13,8 +13,9 @@ actor GoveeClient: GoveeServing {
     }
 
     private struct ResponseEnvelope: Decodable {
-        let code: Int
-        let message: String
+        let code: Int?
+        let message: String?
+        let msg: String?
     }
 
     private let session: URLSession
@@ -57,8 +58,11 @@ actor GoveeClient: GoveeServing {
 
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response)
+        guard !data.isEmpty else { return }
         let envelope = try decode(ResponseEnvelope.self, from: data)
-        try validateAPI(code: envelope.code, message: envelope.message)
+        if let code = envelope.code {
+            try validateAPI(code: code, message: envelope.message ?? envelope.msg ?? "")
+        }
     }
 
     private func normalized(_ key: String) throws -> String {
@@ -73,7 +77,7 @@ actor GoveeClient: GoveeServing {
         case 200..<300: return
         case 401, 403: throw GoveeClientError.unauthorized
         case 429: throw GoveeClientError.rateLimited
-        default: throw GoveeClientError.invalidResponse
+        default: throw GoveeClientError.httpStatus(response.statusCode)
         }
     }
 

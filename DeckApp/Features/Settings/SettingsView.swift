@@ -136,9 +136,12 @@ struct SettingsView: View {
                     }
 
                     if case .failed(let message) = appState.goveeStatus {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(DesignToken.Color.destructive)
+                        LabeledContent("Reason") {
+                            Text(message)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(DesignToken.Color.destructive)
+                        }
+                        .font(.caption)
                     }
 
                     Button {

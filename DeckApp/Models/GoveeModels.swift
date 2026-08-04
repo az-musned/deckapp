@@ -124,11 +124,24 @@ nonisolated struct GoveeDevice: Codable, Sendable, Equatable, Hashable, Identifi
     let sku: String
     let device: String
     let deviceName: String
-    let type: String
+    let type: String?
     let capabilities: [GoveeCapability]
 
     var id: String { "\(sku)|\(device)" }
     var actionableCapabilities: [GoveeCapability] { capabilities.filter(\.isActionable) }
+
+    private enum CodingKeys: String, CodingKey {
+        case sku, device, deviceName, type, capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sku = try container.decode(String.self, forKey: .sku)
+        device = try container.decode(String.self, forKey: .device)
+        deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName) ?? sku
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        capabilities = try container.decodeIfPresent([GoveeCapability].self, forKey: .capabilities) ?? []
+    }
 }
 
 nonisolated struct GoveeDeviceAction: Codable, Sendable, Equatable, Hashable {
@@ -176,6 +189,7 @@ nonisolated enum GoveeClientError: LocalizedError, Sendable, Equatable {
     case missingAPIKey
     case unauthorized
     case rateLimited
+    case httpStatus(Int)
     case invalidResponse
     case rejected(String)
 
@@ -184,6 +198,7 @@ nonisolated enum GoveeClientError: LocalizedError, Sendable, Equatable {
         case .missingAPIKey: "Enter your Govee API key."
         case .unauthorized: "Govee rejected the API key. Check whether a newer key invalidated it."
         case .rateLimited: "Govee is receiving commands too quickly. Wait briefly and try again."
+        case .httpStatus(let code): "Govee returned HTTP \(code)."
         case .invalidResponse: "Govee returned an invalid response."
         case .rejected(let message): message
         }

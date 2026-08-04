@@ -7,8 +7,6 @@ struct GoveeFoundationValidation {
         {
           "sku": "H605C",
           "device": "64:09:C5:32:37:36:2D:13",
-          "deviceName": "Desk Light",
-          "type": "devices.types.light",
           "capabilities": [
             {
               "type": "devices.capabilities.on_off",
@@ -40,13 +38,14 @@ struct GoveeFoundationValidation {
         """#.utf8)
 
         let device = try JSONDecoder().decode(GoveeDevice.self, from: sample)
-        precondition(device.deviceName == "Desk Light")
+        precondition(device.deviceName == "H605C")
+        precondition(device.type == nil)
         precondition(device.actionableCapabilities.map(\.instance) == ["powerSwitch", "brightness"])
 
         let action = GoveeDeviceAction(
             sku: device.sku,
             device: device.device,
-            deviceName: device.deviceName,
+            deviceName: "Desk Light",
             capabilityType: "devices.capabilities.on_off",
             capabilityInstance: "powerSwitch",
             value: .number(1)
