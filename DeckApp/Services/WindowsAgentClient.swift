@@ -53,13 +53,15 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
 
     private let protocolVersion = 1
     private let address: String
-    private let session: URLSession
+    private let requestSession: URLSession
+    private let webSocketSession: URLSession
     private let clientDeviceID: String
     private var credentialToken: String?
     private var activeChallenge: WindowsAgentPairingChallenge?
     private var pairedAgent: PairedWindowsAgent?
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var pendingAcknowledgements: [UInt64: Date] = [:]
     private(set) var measuredLatencyMilliseconds: Int?
     private var lastKnownSecurityState = WindowsAgentSecurityState(
@@ -72,13 +74,22 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     init(address: String, session: URLSession? = nil, defaults: UserDefaults = .standard) {
         self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if let session {
-            self.session = session
+            requestSession = session
+            webSocketSession = session
         } else {
-            let configuration = URLSessionConfiguration.default
-            configuration.waitsForConnectivity = true
-            configuration.timeoutIntervalForRequest = 8
-            configuration.timeoutIntervalForResource = 20
-            self.session = URLSession(configuration: configuration)
+            let requestConfiguration = URLSessionConfiguration.default
+            requestConfiguration.waitsForConnectivity = true
+            requestConfiguration.timeoutIntervalForRequest = 8
+            requestConfiguration.timeoutIntervalForResource = 20
+            requestSession = URLSession(configuration: requestConfiguration)
+
+            let webSocketConfiguration = URLSessionConfiguration.default
+            webSocketConfiguration.waitsForConnectivity = true
+            webSocketConfiguration.timeoutIntervalForRequest = 30
+            // A WebSocket is an ongoing resource. Keep the long default-scale
+            // lifetime and use ping/pong to detect an unhealthy peer instead.
+            webSocketConfiguration.timeoutIntervalForResource = 7 * 24 * 60 * 60
+            webSocketSession = URLSession(configuration: webSocketConfiguration)
         }
         let key = "windowsAgent.clientDeviceID"
         if let saved = defaults.string(forKey: key), !saved.isEmpty {
@@ -205,7 +216,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         var request = URLRequest(url: try endpoint().url(path: "/api/v1/agent/input", webSocket: true))
         request.setValue("Bearer \(credentialToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let socket = session.webSocketTask(with: request)
+        let socket = webSocketSession.webSocketTask(with: request)
         let startedAt = Date()
         socket.resume()
 
@@ -219,6 +230,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             measuredLatencyMilliseconds = latency
             webSocket = socket
             receiveTask = Task { [weak self] in await self?.receiveLoop(socket: socket) }
+            heartbeatTask = Task { [weak self] in await self?.heartbeatLoop(socket: socket) }
             return RemoteAgentSession(
                 sessionID: hello.sessionId,
                 protocolVersion: hello.protocolVersion,
@@ -255,6 +267,8 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     }
 
     func disconnect() async {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         pendingAcknowledgements.removeAll()
@@ -306,7 +320,42 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
                 }
             }
             webSocket = nil
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
             pendingAcknowledgements.removeAll()
+        }
+    }
+
+    private func heartbeatLoop(socket: URLSessionWebSocketTask) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled, webSocket === socket, socket.state == .running else { return }
+                try await sendPing(on: socket)
+            } catch {
+                guard !Task.isCancelled else { return }
+                lastDisconnectReason = "Heartbeat failed: \(error.localizedDescription)"
+                socket.cancel(with: .goingAway, reason: nil)
+                if webSocket === socket {
+                    webSocket = nil
+                    receiveTask?.cancel()
+                    receiveTask = nil
+                    pendingAcknowledgements.removeAll()
+                }
+                return
+            }
+        }
+    }
+
+    private func sendPing(on socket: URLSessionWebSocketTask) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            socket.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
         }
     }
 
@@ -354,7 +403,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             guard let credentialToken else { throw WindowsRemoteInputError.unpairedClient }
             request.setValue("Bearer \(credentialToken)", forHTTPHeaderField: "Authorization")
         }
-        let (data, urlResponse) = try await session.data(for: request)
+        let (data, urlResponse) = try await requestSession.data(for: request)
         guard let response = urlResponse as? HTTPURLResponse else { throw WindowsRemoteInputError.invalidResponse }
         switch response.statusCode {
         case 200..<300: return (data, response)
