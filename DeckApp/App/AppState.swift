@@ -1,6 +1,7 @@
 import Observation
 import SwiftUI
 import SwiftData
+import UIKit
 
 @MainActor
 @Observable
@@ -17,6 +18,9 @@ final class AppState {
     var companionButtonTestStatus: CompanionButtonTestStatus = .idle
     var companionDashboardMappings: [CompanionDashboardAction: CompanionButtonMapping]
     var companionMappingTestStatuses: [CompanionDashboardAction: CompanionButtonTestStatus] = [:]
+    var goveeAPIKey = ""
+    var goveeStatus: GoveeConnectionStatus = .notConfigured
+    var goveeDevices: [GoveeDevice] = []
     var controlDeckItems: [ControlDeckItem]
     var homeAssistantConfiguration: HomeAssistantConfiguration
     var homeAssistantToken = ""
@@ -42,10 +46,12 @@ final class AppState {
     let commandService: any CommandService
     private let companionService: any CompanionServing
     private let companionSettings: CompanionSettingsStore
+    private let goveeService: any GoveeServing
     private var modelContext: ModelContext?
     private var layoutRecord: DashboardLayoutRecord?
     private let homeAssistantService: any HomeAssistantServiceProtocol
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
+    private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
     private var activeHomeAssistantURL: URL?
@@ -58,6 +64,7 @@ final class AppState {
         commandService: any CommandService = MockCommandService(),
         companionService: any CompanionServing = CompanionClient(),
         companionSettings: CompanionSettingsStore = CompanionSettingsStore(),
+        goveeService: any GoveeServing = GoveeClient(),
         remoteInput: RemoteInputController = RemoteInputController(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient()
     ) {
@@ -65,10 +72,12 @@ final class AppState {
         self.commandService = commandService
         self.companionService = companionService
         self.companionSettings = companionSettings
+        self.goveeService = goveeService
         self.remoteInput = remoteInput
         self.homeAssistantService = homeAssistantService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
+        goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
         homeAssistantLightEntityID = UserDefaults.standard.string(forKey: "homeAssistant.roomLightEntityID") ?? ""
         homeAssistantClimateEntityID = UserDefaults.standard.string(forKey: "homeAssistant.climateEntityID") ?? ""
         homeAssistantTelevisionEntityID = UserDefaults.standard.string(forKey: "homeAssistant.televisionEntityID") ?? ""
@@ -103,6 +112,32 @@ final class AppState {
 
     func refresh() async {
         dashboard = await dashboardService.dashboard()
+        if !goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await saveAndDiscoverGovee()
+        }
+    }
+
+    func saveAndDiscoverGovee() async {
+        goveeStatus = .discovering
+        let normalizedKey = goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            guard !normalizedKey.isEmpty else { throw GoveeClientError.missingAPIKey }
+            try goveeKeychain.save(normalizedKey, account: "api-key")
+            let devices = try await goveeService.discoverDevices(apiKey: normalizedKey)
+            goveeAPIKey = normalizedKey
+            goveeDevices = devices.sorted { $0.deviceName.localizedCaseInsensitiveCompare($1.deviceName) == .orderedAscending }
+            goveeStatus = .connected(deviceCount: devices.count)
+        } catch {
+            goveeDevices = []
+            goveeStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func forgetGoveeAPIKey() {
+        try? goveeKeychain.delete(account: "api-key")
+        goveeAPIKey = ""
+        goveeDevices = []
+        goveeStatus = .notConfigured
     }
 
     func saveAndTestHomeAssistant() async {
@@ -1244,6 +1279,88 @@ final class AppState {
             execution.backendMessage = error.localizedDescription
         }
 
+        pendingCommand = execution
+    }
+
+    func performControlDeckAction(_ item: ControlDeckItem) async {
+        if let action = item.action {
+            switch action {
+            case .shortcut(let shortcut):
+                await performShortcut(shortcut, title: item.title)
+            case .govee(let goveeAction):
+                await performGoveeAction(goveeAction, title: item.title)
+            case .companion(let mapping):
+                var mappedItem = item
+                mappedItem.mapping = mapping
+                await performCompanionControl(mappedItem)
+            }
+            return
+        }
+
+        // Existing saved dashboards predate ControlDeckAction. Preserve their
+        // Companion mappings without requiring a migration prompt.
+        await performCompanionControl(item)
+    }
+
+    private func performShortcut(_ shortcut: AppleShortcutAction, title: String) async {
+        var execution = CommandExecution(action: .companionButton(title), status: .running)
+        pendingCommand = execution
+
+        let name = shortcut.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            execution.status = .unavailable
+            execution.backendMessage = "Choose an Apple Shortcut for \(title)."
+            pendingCommand = execution
+            return
+        }
+
+        var components = URLComponents()
+        components.scheme = "shortcuts"
+        components.host = "run-shortcut"
+        var queryItems = [URLQueryItem(name: "name", value: name)]
+        let input = shortcut.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !input.isEmpty {
+            queryItems.append(URLQueryItem(name: "input", value: "text"))
+            queryItems.append(URLQueryItem(name: "text", value: input))
+        }
+        components.queryItems = queryItems
+
+        guard let url = components.url, await UIApplication.shared.open(url) else {
+            execution.status = .failed
+            execution.backendMessage = "The Shortcuts app could not run \(name)."
+            pendingCommand = execution
+            return
+        }
+
+        execution.backendMessage = "Sent \(name) to Apple Shortcuts. Completion is handled by the shortcut."
+        pendingCommand = execution
+    }
+
+    private func performGoveeAction(_ action: GoveeDeviceAction, title: String) async {
+        var execution = CommandExecution(action: .companionButton(title), status: .running)
+        execution.backendMessage = "Sending \(title) to Govee…"
+        pendingCommand = execution
+
+        guard !action.sku.isEmpty,
+              !action.device.isEmpty,
+              !action.capabilityType.isEmpty,
+              !action.capabilityInstance.isEmpty,
+              action.value != .null else {
+            execution.status = .unavailable
+            execution.backendMessage = "Choose a Govee device, control, and value for \(title)."
+            pendingCommand = execution
+            return
+        }
+
+        do {
+            let key = try goveeKeychain.load(account: "api-key") ?? ""
+            try await goveeService.control(action, apiKey: key)
+            execution.status = .confirmed
+            execution.backendMessage = "Govee accepted \(title)."
+        } catch {
+            execution.status = (error as? GoveeClientError) == .rateLimited ? .queued : .failed
+            execution.backendMessage = error.localizedDescription
+        }
         pendingCommand = execution
     }
 

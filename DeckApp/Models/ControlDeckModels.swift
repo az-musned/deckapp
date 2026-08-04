@@ -9,11 +9,46 @@ enum ControlDeckItemKind: String, Codable, Sendable {
 
     var description: String {
         switch self {
-        case .companionButton: "Companion Button"
+        case .companionButton: "Action Button"
         case .folder: "Folder"
         case .pcStatusWidget: "PC Status Widget"
         case .microphoneWidget: "Microphone Widget"
         case .volumeWidget: "Volume Widget"
+        }
+    }
+}
+
+enum ControlDeckActionType: String, CaseIterable, Identifiable, Codable, Sendable {
+    case shortcut
+    case govee
+    case companion
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .shortcut: "Apple Shortcut"
+        case .govee: "Govee"
+        case .companion: "Bitfocus Companion"
+        }
+    }
+}
+
+struct AppleShortcutAction: Codable, Sendable, Equatable, Hashable {
+    var name = ""
+    var input = ""
+}
+
+enum ControlDeckAction: Codable, Sendable, Equatable, Hashable {
+    case shortcut(AppleShortcutAction)
+    case govee(GoveeDeviceAction)
+    case companion(CompanionButtonMapping)
+
+    var type: ControlDeckActionType {
+        switch self {
+        case .shortcut: .shortcut
+        case .govee: .govee
+        case .companion: .companion
         }
     }
 }
@@ -26,6 +61,7 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
     var symbol: String
     var tintName: String
     var mapping: CompanionButtonMapping?
+    var action: ControlDeckAction?
     var systemAction: CompanionDashboardAction?
     var requiresConfirmation: Bool
     var children: [ControlDeckItem]
@@ -38,6 +74,7 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
         symbol: String,
         tintName: String = "blue",
         mapping: CompanionButtonMapping? = nil,
+        action: ControlDeckAction? = nil,
         systemAction: CompanionDashboardAction? = nil,
         requiresConfirmation: Bool = false,
         children: [ControlDeckItem] = []
@@ -49,6 +86,7 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
         self.symbol = symbol
         self.tintName = tintName
         self.mapping = mapping
+        self.action = action
         self.systemAction = systemAction
         self.requiresConfirmation = requiresConfirmation
         self.children = children
@@ -66,7 +104,19 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
             subtitle: mapping.locationDescription,
             symbol: symbol,
             tintName: tintName,
-            mapping: mapping
+            mapping: mapping,
+            action: .companion(mapping)
+        )
+    }
+
+    static func actionButton() -> ControlDeckItem {
+        ControlDeckItem(
+            kind: .companionButton,
+            title: "New Action",
+            subtitle: "Choose an action",
+            symbol: "bolt.fill",
+            tintName: "blue",
+            action: .shortcut(AppleShortcutAction())
         )
     }
 
@@ -104,6 +154,7 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
             mapping: launchMapping ?? CompanionButtonMapping()
         )
         launch.mapping = launchMapping
+        launch.action = launchMapping.map(ControlDeckAction.companion)
         launch.systemAction = .launchGame
         launch.subtitle = launchMapping == nil ? "Not mapped" : "Start your game"
 
@@ -114,6 +165,7 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
             mapping: sleepMapping ?? CompanionButtonMapping()
         )
         sleep.mapping = sleepMapping
+        sleep.action = sleepMapping.map(ControlDeckAction.companion)
         sleep.systemAction = .sleepPC
         sleep.subtitle = sleepMapping == nil ? "Not mapped" : "Put PC to sleep"
         sleep.requiresConfirmation = true

@@ -61,12 +61,12 @@ struct ControlDeckView: View {
         ) {
             if let item = itemAwaitingConfirmation {
                 Button(item.title, role: .destructive) {
-                    Task { await appState.performCompanionControl(item) }
+                    Task { await appState.performControlDeckAction(item) }
                 }
                 Button("Cancel", role: .cancel) {}
             }
         } message: {
-            Text("This Companion button is marked as requiring confirmation and may interrupt work on the PC.")
+            Text("This action is marked as requiring confirmation and may control another device or app.")
         }
     }
 
@@ -94,7 +94,7 @@ struct ControlDeckView: View {
         if item.requiresConfirmation {
             itemAwaitingConfirmation = item
         } else {
-            Task { await appState.performCompanionControl(item) }
+            Task { await appState.performControlDeckAction(item) }
         }
     }
 
@@ -237,7 +237,7 @@ private struct ControlDeckFolderView: View {
                                 if item.requiresConfirmation {
                                     itemAwaitingConfirmation = item
                                 } else {
-                                    Task { await appState.performCompanionControl(item) }
+                                    Task { await appState.performControlDeckAction(item) }
                                 }
                             }
                         }
@@ -250,7 +250,7 @@ private struct ControlDeckFolderView: View {
             .navigationBarTitleDisplayMode(.inline)
             .overlay {
                 if folder?.children.isEmpty != false {
-                    ContentUnavailableView("Empty Folder", systemImage: "folder", description: Text("Use Customize to add a Companion button here."))
+                    ContentUnavailableView("Empty Folder", systemImage: "folder", description: Text("Use Customize to add an action here."))
                 }
             }
             .toolbar {
@@ -261,7 +261,7 @@ private struct ControlDeckFolderView: View {
             .confirmationDialog("Run this PC action?", isPresented: confirmationBinding, titleVisibility: .visible) {
                 if let item = itemAwaitingConfirmation {
                     Button(item.title, role: .destructive) {
-                        Task { await appState.performCompanionControl(item) }
+                        Task { await appState.performControlDeckAction(item) }
                     }
                     Button("Cancel", role: .cancel) {}
                 }
@@ -290,7 +290,7 @@ private struct ControlDeckEditorView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Add Companion buttons, group game launchers in folders, and choose which live PC widgets appear on the dashboard.")
+                    Text("Add Apple Shortcuts, Govee controls, Companion buttons, folders, and live PC widgets.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -333,9 +333,9 @@ private struct ControlDeckEditorView: View {
     private var addMenu: some View {
         Menu {
             Button {
-                editContext = ControlDeckEditContext(item: .companionButton(), parentFolderID: nil, isNew: true)
+                editContext = ControlDeckEditContext(item: .actionButton(), parentFolderID: nil, isNew: true)
             } label: {
-                Label("Companion Button", systemImage: "rectangle.and.hand.point.up.left.fill")
+                Label("Action Button", systemImage: "bolt.fill")
             }
 
             Button {
@@ -370,7 +370,7 @@ private struct ControlDeckEditorView: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title).font(.subheadline.weight(.semibold))
-                Text(item.kind.description + (item.kind == .companionButton ? " · \(item.mapping?.locationDescription ?? "Not mapped")" : ""))
+                Text(item.kind.description + (item.kind == .companionButton ? " · \(actionDescription(for: item))" : ""))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -387,6 +387,15 @@ private struct ControlDeckEditorView: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
+        }
+    }
+
+    private func actionDescription(for item: ControlDeckItem) -> String {
+        switch item.action {
+        case .shortcut(let shortcut): shortcut.name.isEmpty ? "Shortcut not selected" : shortcut.name
+        case .govee(let action): action.deviceName
+        case .companion(let mapping): mapping.locationDescription
+        case nil: item.mapping?.locationDescription ?? "Not configured"
         }
     }
 }
@@ -455,7 +464,62 @@ private struct ControlDeckItemEditor: View {
                         }
                     }
 
-                    Section {
+                    Section("Action") {
+                        Picker("Run", selection: actionTypeBinding) {
+                            ForEach(ControlDeckActionType.allCases) { type in
+                                Text(type.title).tag(type)
+                            }
+                        }
+                        Toggle("Require confirmation", isOn: $item.requiresConfirmation)
+                    }
+
+                    if selectedActionType == .shortcut {
+                        Section("Apple Shortcut") {
+                            TextField("Shortcut name", text: shortcutNameBinding)
+                                .textInputAutocapitalization(.words)
+                                .autocorrectionDisabled()
+                            TextField("Optional text input", text: shortcutInputBinding)
+                            Text("The shortcut must already exist on this iPhone or iPad. Running it may temporarily open the Shortcuts app.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if selectedActionType == .govee {
+                        Section("Govee Action") {
+                            if actionableGoveeDevices.isEmpty {
+                                Label("Add your API key and discover devices in Settings first.", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(DesignToken.Color.warning)
+                            } else {
+                                Picker("Device", selection: goveeDeviceIDBinding) {
+                                    ForEach(actionableGoveeDevices) { device in
+                                        Text(device.deviceName).tag(device.id)
+                                    }
+                                }
+
+                                if let device = selectedGoveeDevice {
+                                    Picker("Control", selection: goveeCapabilityIDBinding) {
+                                        ForEach(device.actionableCapabilities) { capability in
+                                            Text(capability.title).tag(capability.id)
+                                        }
+                                    }
+                                }
+
+                                if let capability = selectedGoveeCapability,
+                                   let options = capability.parameters?.options,
+                                   !options.isEmpty {
+                                    Picker("Value", selection: goveeValueBinding) {
+                                        ForEach(options) { option in
+                                            Text(option.name).tag(option.value)
+                                        }
+                                    }
+                                } else if let range = selectedGoveeCapability?.parameters?.range {
+                                    LabeledContent("Value", value: goveeRangeBinding.wrappedValue.formatted(.number.precision(.fractionLength(0))))
+                                    Slider(value: goveeRangeBinding, in: range.min...range.max, step: max(range.precision ?? 1, 1))
+                                }
+                            }
+                        }
+                    } else {
+                        Section {
                         if !isConnected {
                             Button {
                                 Task { await appState.testCompanionConnection() }
@@ -483,8 +547,6 @@ private struct ControlDeckItemEditor: View {
                         Stepper(value: mappingBinding(\.column), in: 0...99) {
                             LabeledContent("Column", value: "\(item.mapping?.column ?? 0)")
                         }
-                        Toggle("Require confirmation", isOn: $item.requiresConfirmation)
-
                         Button {
                             showTestConfirmation = true
                         } label: {
@@ -504,6 +566,7 @@ private struct ControlDeckItemEditor: View {
                         Text("Companion Mapping")
                     } footer: {
                         Text("Testing confirms only that Companion accepted the press. Verify the action on the PC.")
+                    }
                     }
                 }
             }
@@ -540,7 +603,134 @@ private struct ControlDeckItemEditor: View {
             var mapping = item.mapping ?? CompanionButtonMapping()
             mapping[keyPath: keyPath] = value
             item.mapping = mapping
+            item.action = .companion(mapping)
         }
+    }
+
+    private var selectedActionType: ControlDeckActionType {
+        item.action?.type ?? (item.mapping == nil ? .shortcut : .companion)
+    }
+
+    private var actionTypeBinding: Binding<ControlDeckActionType> {
+        Binding(get: { selectedActionType }) { type in
+            switch type {
+            case .shortcut:
+                item.action = .shortcut(AppleShortcutAction())
+            case .govee:
+                item.action = firstGoveeAction()
+            case .companion:
+                let mapping = item.mapping ?? CompanionButtonMapping()
+                item.mapping = mapping
+                item.action = .companion(mapping)
+            }
+        }
+    }
+
+    private var shortcutNameBinding: Binding<String> {
+        Binding {
+            guard case .shortcut(let shortcut) = item.action else { return "" }
+            return shortcut.name
+        } set: { name in
+            var shortcut = currentShortcut
+            shortcut.name = name
+            item.action = .shortcut(shortcut)
+        }
+    }
+
+    private var shortcutInputBinding: Binding<String> {
+        Binding {
+            guard case .shortcut(let shortcut) = item.action else { return "" }
+            return shortcut.input
+        } set: { input in
+            var shortcut = currentShortcut
+            shortcut.input = input
+            item.action = .shortcut(shortcut)
+        }
+    }
+
+    private var currentShortcut: AppleShortcutAction {
+        guard case .shortcut(let shortcut) = item.action else { return AppleShortcutAction() }
+        return shortcut
+    }
+
+    private var selectedGoveeAction: GoveeDeviceAction? {
+        guard case .govee(let action) = item.action else { return nil }
+        return action
+    }
+
+    private var actionableGoveeDevices: [GoveeDevice] {
+        appState.goveeDevices.filter { !$0.actionableCapabilities.isEmpty }
+    }
+
+    private var selectedGoveeDevice: GoveeDevice? {
+        guard let action = selectedGoveeAction else { return actionableGoveeDevices.first }
+        return actionableGoveeDevices.first { $0.sku == action.sku && $0.device == action.device }
+    }
+
+    private var selectedGoveeCapability: GoveeCapability? {
+        guard let device = selectedGoveeDevice else { return nil }
+        guard let action = selectedGoveeAction else { return device.actionableCapabilities.first }
+        return device.actionableCapabilities.first {
+            $0.type == action.capabilityType && $0.instance == action.capabilityInstance
+        } ?? device.actionableCapabilities.first
+    }
+
+    private var goveeDeviceIDBinding: Binding<String> {
+        Binding(get: { selectedGoveeDevice?.id ?? "" }) { id in
+            guard let device = actionableGoveeDevices.first(where: { $0.id == id }) else { return }
+            item.action = makeGoveeAction(device: device, capability: device.actionableCapabilities.first)
+        }
+    }
+
+    private var goveeCapabilityIDBinding: Binding<String> {
+        Binding(get: { selectedGoveeCapability?.id ?? "" }) { id in
+            guard let device = selectedGoveeDevice,
+                  let capability = device.actionableCapabilities.first(where: { $0.id == id }) else { return }
+            item.action = makeGoveeAction(device: device, capability: capability)
+        }
+    }
+
+    private var goveeValueBinding: Binding<GoveeValue> {
+        Binding(get: { selectedGoveeAction?.value ?? .null }) { value in
+            guard var action = selectedGoveeAction else { return }
+            action.value = value
+            item.action = .govee(action)
+        }
+    }
+
+    private var goveeRangeBinding: Binding<Double> {
+        Binding {
+            guard case .number(let value) = selectedGoveeAction?.value else {
+                return selectedGoveeCapability?.parameters?.range?.min ?? 0
+            }
+            return value
+        } set: { value in
+            guard var action = selectedGoveeAction else { return }
+            action.value = .number(value)
+            item.action = .govee(action)
+        }
+    }
+
+    private func firstGoveeAction() -> ControlDeckAction {
+        guard let device = actionableGoveeDevices.first else {
+            return .govee(GoveeDeviceAction(
+                sku: "", device: "", deviceName: "Govee Device",
+                capabilityType: "", capabilityInstance: "", value: .null
+            ))
+        }
+        return makeGoveeAction(device: device, capability: device.actionableCapabilities.first)
+    }
+
+    private func makeGoveeAction(device: GoveeDevice, capability: GoveeCapability?) -> ControlDeckAction {
+        let capability = capability ?? device.actionableCapabilities.first
+        return .govee(GoveeDeviceAction(
+            sku: device.sku,
+            device: device.device,
+            deviceName: device.deviceName,
+            capabilityType: capability?.type ?? "",
+            capabilityInstance: capability?.instance ?? "",
+            value: capability?.defaultValue ?? .null
+        ))
     }
 
     private func save() {
@@ -548,8 +738,13 @@ private struct ControlDeckItemEditor: View {
         if item.kind == .folder {
             let count = item.children.count
             item.subtitle = "\(count) \(count == 1 ? "button" : "buttons")"
-        } else if item.kind == .companionButton, item.subtitle.isEmpty {
-            item.subtitle = item.mapping?.locationDescription ?? "Companion action"
+        } else if item.kind == .companionButton, item.subtitle.isEmpty || item.subtitle == "Choose an action" {
+            switch item.action {
+            case .shortcut(let shortcut): item.subtitle = shortcut.name.isEmpty ? "Shortcut not selected" : shortcut.name
+            case .govee(let action): item.subtitle = action.summary
+            case .companion(let mapping): item.subtitle = mapping.locationDescription
+            case nil: item.subtitle = item.mapping?.locationDescription ?? "Action not configured"
+            }
         }
 
         if isNew {
