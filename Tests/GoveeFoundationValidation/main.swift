@@ -63,6 +63,17 @@ struct GoveeFoundationValidation {
         precondition(capability?["instance"] as? String == "powerSwitch")
         precondition(capability?["value"] as? Int == 1)
 
+        let stateRequest = GoveeStateRequest(
+            device: device,
+            requestID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        )
+        let stateObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(stateRequest)) as? [String: Any]
+        let statePayload = stateObject?["payload"] as? [String: Any]
+        precondition(stateObject?["requestId"] as? String == "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        precondition(statePayload?["sku"] as? String == "H605C")
+        precondition(statePayload?["device"] as? String == "64:09:C5:32:37:36:2D:13")
+        precondition(device.actionableCapabilities.first?.descriptor.kind == .power)
+
         print("Govee discovery and control payload validation passed")
     }
 }

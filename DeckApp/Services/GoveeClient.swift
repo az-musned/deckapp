@@ -3,6 +3,7 @@ import Foundation
 protocol GoveeServing: Sendable {
     func discoverDevices(apiKey: String) async throws -> [GoveeDevice]
     func control(_ action: GoveeDeviceAction, apiKey: String) async throws
+    func state(for device: GoveeDevice, apiKey: String) async throws -> [String: GoveeValue]
 }
 
 actor GoveeClient: GoveeServing {
@@ -16,6 +17,22 @@ actor GoveeClient: GoveeServing {
         let code: Int?
         let message: String?
         let msg: String?
+    }
+
+    private struct StateEnvelope: Decodable {
+        struct Payload: Decodable {
+            struct Capability: Decodable {
+                struct State: Decodable { let value: GoveeValue? }
+                let type: String
+                let instance: String
+                let state: State?
+            }
+            let capabilities: [Capability]
+        }
+        let code: Int
+        let msg: String?
+        let message: String?
+        let payload: Payload?
     }
 
     private let session: URLSession
@@ -63,6 +80,25 @@ actor GoveeClient: GoveeServing {
         if let code = envelope.code {
             try validateAPI(code: code, message: envelope.message ?? envelope.msg ?? "")
         }
+    }
+
+    func state(for device: GoveeDevice, apiKey: String) async throws -> [String: GoveeValue] {
+        let key = try normalized(apiKey)
+        var request = URLRequest(url: baseURL.appending(path: "router/api/v1/device/state"))
+        request.httpMethod = "POST"
+        request.setValue(key, forHTTPHeaderField: "Govee-API-Key")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(GoveeStateRequest(device: device))
+
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response)
+        let envelope = try decode(StateEnvelope.self, from: data)
+        try validateAPI(code: envelope.code, message: envelope.message ?? envelope.msg ?? "")
+        return Dictionary(uniqueKeysWithValues: (envelope.payload?.capabilities ?? []).compactMap {
+            guard let value = $0.state?.value else { return nil }
+            return ("\($0.type)|\($0.instance)", value)
+        })
     }
 
     private func normalized(_ key: String) throws -> String {

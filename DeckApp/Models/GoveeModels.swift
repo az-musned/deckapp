@@ -85,6 +85,48 @@ nonisolated struct GoveeCapability: Codable, Sendable, Equatable, Hashable, Iden
 
     var id: String { "\(type)|\(instance)" }
 
+    var deviceCapabilityKind: DeviceCapabilityKind {
+        switch instance {
+        case "powerSwitch": .power
+        case "brightness": .brightness
+        case "colorRgb": .color
+        case "colorTemperatureK": .colorTemperature
+        case "lightScene", "diyScene", "snapshot": .sceneActivation
+        default: parameters?.range == nil ? .selection : .numericRange
+        }
+    }
+
+    var descriptor: DeviceCapabilityDescriptor {
+        let numericRange = parameters?.range.map {
+            NumericRangeCapability(
+                id: id,
+                name: title,
+                minimum: $0.min,
+                maximum: $0.max,
+                step: max($0.precision ?? 1, 1),
+                unit: parameters?.unit,
+                currentValue: nil,
+                isWritable: true
+            )
+        }
+        let selection = parameters?.options.map {
+            SelectionCapability(
+                id: id,
+                name: title,
+                options: $0.map(\.name),
+                selectedOption: nil,
+                isWritable: true
+            )
+        }
+        return DeviceCapabilityDescriptor(
+            id: id,
+            kind: deviceCapabilityKind,
+            name: title,
+            numericRange: numericRange,
+            selection: selection
+        )
+    }
+
     var title: String {
         switch instance {
         case "powerSwitch": "Power"
@@ -182,6 +224,21 @@ nonisolated struct GoveeControlRequest: Codable, Sendable, Equatable {
                 value: action.value
             )
         )
+    }
+}
+
+nonisolated struct GoveeStateRequest: Codable, Sendable, Equatable {
+    struct Payload: Codable, Sendable, Equatable {
+        let sku: String
+        let device: String
+    }
+
+    let requestId: String
+    let payload: Payload
+
+    init(device: GoveeDevice, requestID: UUID = UUID()) {
+        requestId = requestID.uuidString
+        payload = Payload(sku: device.sku, device: device.device)
     }
 }
 

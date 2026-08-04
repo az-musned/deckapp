@@ -226,15 +226,37 @@ private struct WidgetConfigurationView: View {
                     optionalSizePicker("iPad override", selection: $widget.padSize)
                 }
 
-                Section {
-                    LabeledContent("Backend", value: widget.backend.backend.title)
-                    TextField("Backend identifier", text: $widget.backend.identifier)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } header: {
-                    Text("Mapping")
-                } footer: {
-                    Text("Phase 3 will replace manual Home Assistant identifiers with discovered entity selection. Companion mappings remain configured inside the Control Deck.")
+                if widget.kind == .light {
+                    Section {
+                        Picker("Source", selection: lightSourceBinding) {
+                            Text("Mock Light").tag("mock")
+                            if let homeAssistantID {
+                                Text("Home Assistant · \(homeAssistantID)").tag("ha:\(homeAssistantID)")
+                            }
+                            ForEach(appState.goveeDevices) { device in
+                                Text("Govee · \(device.deviceName)").tag("govee:\(device.id)")
+                            }
+                            if widget.backend.backend == .govee,
+                               appState.goveeDevice(for: widget.backend.identifier) == nil {
+                                Text("Govee · Unavailable device").tag("govee:\(widget.backend.identifier)")
+                            }
+                        }
+                    } header: {
+                        Text("Device Mapping")
+                    } footer: {
+                        Text("Govee widgets automatically use only the controls reported by the selected device. Choose a larger widget size to show more controls.")
+                    }
+                } else {
+                    Section {
+                        LabeledContent("Backend", value: widget.backend.backend.title)
+                        TextField("Backend identifier", text: $widget.backend.identifier)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        Text("Mapping")
+                    } footer: {
+                        Text("Companion mappings remain configured inside the Control Deck.")
+                    }
                 }
 
                 Section("Supported Capabilities") {
@@ -273,6 +295,40 @@ private struct WidgetConfigurationView: View {
             }
         }
     }
+
+    private var homeAssistantID: String? {
+        let identifier = widget.backend.backend == .homeAssistant
+            ? widget.backend.identifier
+            : appState.homeAssistantLightEntityID
+        return identifier.isEmpty ? nil : identifier
+    }
+
+    private var lightSourceBinding: Binding<String> {
+        Binding {
+            switch widget.backend.backend {
+            case .govee: "govee:\(widget.backend.identifier)"
+            case .homeAssistant: "ha:\(widget.backend.identifier)"
+            default: "mock"
+            }
+        } set: { selection in
+            if selection == "mock" {
+                widget.backend = WidgetBackendReference(backend: .mock, identifier: "mock.light.room")
+                widget.subtitle = "Mock light"
+                widget.capabilities = MockCapabilities.light
+            } else if selection.hasPrefix("ha:") {
+                let identifier = String(selection.dropFirst(3))
+                widget.backend = WidgetBackendReference(backend: .homeAssistant, identifier: identifier)
+                widget.subtitle = "Home Assistant · \(identifier)"
+            } else if selection.hasPrefix("govee:") {
+                let identifier = String(selection.dropFirst(6))
+                guard let device = appState.goveeDevice(for: identifier) else { return }
+                widget.backend = WidgetBackendReference(backend: .govee, identifier: device.id)
+                widget.subtitle = "Govee · \(device.deviceName)"
+                widget.capabilities = device.actionableCapabilities.map(\.descriptor)
+                if widget.title == "Room Lights" { widget.title = device.deviceName }
+            }
+        }
+    }
 }
 
 private extension RoomWidgetKind {
@@ -306,6 +362,7 @@ private extension WidgetBackendKind {
         switch self {
         case .mock: "Mock"
         case .homeAssistant: "Home Assistant"
+        case .govee: "Govee"
         case .windowsAgent: "Windows Agent"
         case .companion: "Companion"
         }

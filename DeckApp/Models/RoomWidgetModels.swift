@@ -65,6 +65,7 @@ enum RoomWidgetLayoutClass: String, Codable, Sendable {
 enum WidgetBackendKind: String, Codable, Sendable {
     case mock
     case homeAssistant
+    case govee
     case windowsAgent
     case companion
 }

@@ -60,6 +60,13 @@ struct RoomControlValidation {
         precondition(duplicate.id != overridden.id)
         precondition(duplicate.phoneSize == .wide && duplicate.padSize == .small)
 
+        var goveeWidget = duplicate
+        goveeWidget.backend = WidgetBackendReference(backend: .govee, identifier: "H605C|device-id")
+        let goveeData = try JSONEncoder().encode(goveeWidget)
+        let restoredGoveeWidget = try JSONDecoder().decode(RoomWidgetDefinition.self, from: goveeData)
+        precondition(restoredGoveeWidget.backend.backend == .govee)
+        precondition(restoredGoveeWidget.backend.identifier == "H605C|device-id")
+
         let encoded = try JSONEncoder().encode(template)
         let decoded = try JSONDecoder().decode(RoomControlTemplate.self, from: encoded)
         precondition(decoded == template)

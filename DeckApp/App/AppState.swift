@@ -21,6 +21,8 @@ final class AppState {
     var goveeAPIKey = ""
     var goveeStatus: GoveeConnectionStatus = .notConfigured
     var goveeDevices: [GoveeDevice] = []
+    var goveeControlValues: [String: [String: GoveeValue]] = [:]
+    @ObservationIgnored private var goveeStateRefreshDates: [String: Date] = [:]
     var controlDeckItems: [ControlDeckItem]
     var homeAssistantConfiguration: HomeAssistantConfiguration
     var homeAssistantToken = ""
@@ -137,7 +139,53 @@ final class AppState {
         try? goveeKeychain.delete(account: "api-key")
         goveeAPIKey = ""
         goveeDevices = []
+        goveeControlValues = [:]
+        goveeStateRefreshDates = [:]
         goveeStatus = .notConfigured
+    }
+
+    func goveeDevice(for identifier: String) -> GoveeDevice? {
+        goveeDevices.first { $0.id == identifier }
+    }
+
+    func goveeValue(deviceID: String, capabilityID: String) -> GoveeValue? {
+        goveeControlValues[deviceID]?[capabilityID]
+    }
+
+    func refreshGoveeState(deviceID: String) async {
+        guard let device = goveeDevice(for: deviceID) else { return }
+        if let refreshedAt = goveeStateRefreshDates[device.id],
+           Date.now.timeIntervalSince(refreshedAt) < 5,
+           goveeControlValues[device.id] != nil {
+            return
+        }
+        goveeStateRefreshDates[device.id] = .now
+        do {
+            let key = try goveeKeychain.load(account: "api-key") ?? ""
+            goveeControlValues[device.id] = try await goveeService.state(for: device, apiKey: key)
+        } catch {
+            if goveeControlValues[device.id] == nil {
+                goveeControlValues[device.id] = [:]
+            }
+        }
+    }
+
+    func setGoveeCapability(deviceID: String, capabilityID: String, value: GoveeValue) async {
+        guard let device = goveeDevice(for: deviceID),
+              let capability = device.actionableCapabilities.first(where: { $0.id == capabilityID }) else { return }
+        let previousValue = goveeControlValues[device.id]?[capability.id]
+        goveeControlValues[device.id, default: [:]][capability.id] = value
+        let action = GoveeDeviceAction(
+            sku: device.sku,
+            device: device.device,
+            deviceName: device.deviceName,
+            capabilityType: capability.type,
+            capabilityInstance: capability.instance,
+            value: value
+        )
+        if !(await performGoveeAction(action, title: "\(device.deviceName) \(capability.title)")) {
+            goveeControlValues[device.id, default: [:]][capability.id] = previousValue
+        }
     }
 
     func saveAndTestHomeAssistant() async {
@@ -1003,7 +1051,7 @@ final class AppState {
         }
 
         if !homeAssistantLightEntityID.isEmpty,
-           let index = roomControlTemplate.widgets.firstIndex(where: { $0.kind == .light }) {
+           let index = roomControlTemplate.widgets.firstIndex(where: { $0.kind == .light && $0.backend.backend != .govee }) {
             roomControlTemplate.widgets[index].backend = WidgetBackendReference(
                 backend: .homeAssistant,
                 identifier: homeAssistantLightEntityID
@@ -1336,7 +1384,8 @@ final class AppState {
         pendingCommand = execution
     }
 
-    private func performGoveeAction(_ action: GoveeDeviceAction, title: String) async {
+    @discardableResult
+    private func performGoveeAction(_ action: GoveeDeviceAction, title: String) async -> Bool {
         var execution = CommandExecution(action: .companionButton(title), status: .running)
         execution.backendMessage = "Sending \(title) to Govee…"
         pendingCommand = execution
@@ -1349,7 +1398,7 @@ final class AppState {
             execution.status = .unavailable
             execution.backendMessage = "Choose a Govee device, control, and value for \(title)."
             pendingCommand = execution
-            return
+            return false
         }
 
         do {
@@ -1357,11 +1406,14 @@ final class AppState {
             try await goveeService.control(action, apiKey: key)
             execution.status = .confirmed
             execution.backendMessage = "Govee accepted \(title)."
+            pendingCommand = execution
+            return true
         } catch {
             execution.status = (error as? GoveeClientError) == .rateLimited ? .queued : .failed
             execution.backendMessage = error.localizedDescription
+            pendingCommand = execution
+            return false
         }
-        pendingCommand = execution
     }
 
     func performCompanionControl(_ item: ControlDeckItem) async {
