@@ -793,6 +793,7 @@ private struct LiveGoXLRWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
     let compact: Bool
+    @State private var showingMixer = false
 
     var body: some View {
         DashboardCard {
@@ -801,15 +802,32 @@ private struct LiveGoXLRWidget: View {
                 availability: snapshot?.goXLRConnected == true ? .available : .unavailable
             )
 
-            if let snapshot, snapshot.goXLRConnected {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: compact ? 130 : 180), spacing: DesignToken.Spacing.medium)]) {
-                    ForEach(visibleChannels(snapshot.goXLRChannels)) { channel in
-                        LiveGoXLRChannelRow(
-                            remote: appState.remoteInput,
-                            channel: channel,
-                            tint: Color.controlDeckTint(named: definition.tintName)
-                        )
+            if snapshot?.goXLRConnected == true {
+                if definition.size.presentationDensity == .expanded {
+                    Label(
+                        meterStore.meterStreamIsStale ? "Live meters stale" : meterStore.meterConnectionState.title,
+                        systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
+                }
+                if definition.size.presentationDensity == .compact {
+                    compactMeters
+                } else {
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: DesignToken.Spacing.small) {
+                            ForEach(visibleChannels) { channel in
+                                LiveGoXLRChannelRow(
+                                    store: meterStore,
+                                    channel: channel,
+                                    tint: Color.controlDeckTint(named: definition.tintName),
+                                    showsDecibels: definition.size.presentationDensity == .expanded
+                                )
+                                .frame(width: compact ? 155 : 190)
+                            }
+                        }
                     }
+                    .scrollIndicators(.hidden)
                 }
             } else {
                 Label(
@@ -823,8 +841,14 @@ private struct LiveGoXLRWidget: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { if definition.size.presentationDensity == .compact { showingMixer = true } }
+        .sheet(isPresented: $showingMixer) { GoXLRMixerView(store: meterStore) }
         .task {
             await appState.remoteInput.refreshAgentSecurityState()
+            await meterStore.startMetering()
+            do { try await Task.sleep(for: .seconds(86_400)) } catch { }
+            await meterStore.stopMetering()
         }
     }
 
@@ -832,60 +856,107 @@ private struct LiveGoXLRWidget: View {
         appState.remoteInput.capabilitySnapshot
     }
 
-    private func visibleChannels(_ channels: [WindowsGoXLRChannelState]) -> [WindowsGoXLRChannelState] {
+    private var meterStore: GoXLRStore { appState.remoteInput.goXLR }
+
+    private var visibleChannels: [GoXLRChannelState] {
         let limit = switch definition.size.presentationDensity {
-        case .compact: 1
-        case .standard: 2
-        case .expanded: channels.count
+        case .compact: min(4, meterStore.channels.count)
+        case .standard: min(6, meterStore.channels.count)
+        case .expanded: meterStore.channels.count
         }
-        return Array(channels.prefix(limit))
+        return Array(meterStore.channels.prefix(limit))
+    }
+
+    private var compactMeters: some View {
+        HStack(alignment: .bottom, spacing: DesignToken.Spacing.small) {
+            ForEach(visibleChannels) { channel in
+                VStack(spacing: 3) {
+                    AudioLevelMeterView(
+                        level: channel.displayLevel,
+                        peakHold: channel.peakHold,
+                        isClipping: channel.isClipping,
+                        isAvailable: channel.isAvailable,
+                        isStale: meterStore.meterStreamIsStale,
+                        decibels: channel.decibels,
+                        channelName: channel.displayName
+                    )
+                    .frame(width: 18, height: 52)
+                    Text(String(channel.displayName.prefix(4)))
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
 private struct LiveGoXLRChannelRow: View {
-    let remote: RemoteInputController
-    let channel: WindowsGoXLRChannelState
+    let store: GoXLRStore
+    let channel: GoXLRChannelState
     let tint: Color
+    let showsDecibels: Bool
     @State private var draftLevel: Double
 
-    init(remote: RemoteInputController, channel: WindowsGoXLRChannelState, tint: Color) {
-        self.remote = remote
+    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color, showsDecibels: Bool) {
+        self.store = store
         self.channel = channel
         self.tint = tint
-        _draftLevel = State(initialValue: channel.level)
+        self.showsDecibels = showsDecibels
+        _draftLevel = State(initialValue: channel.volume)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
-            HStack {
+            HStack(alignment: .center) {
+                AudioLevelMeterView(
+                    level: channel.displayLevel,
+                    peakHold: channel.peakHold,
+                    isClipping: channel.isClipping,
+                    isAvailable: channel.isAvailable,
+                    isStale: store.meterStreamIsStale,
+                    decibels: channel.decibels,
+                    channelName: channel.displayName
+                )
+                .frame(width: 16, height: 54)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(channel.name)
+                    Text(channel.displayName)
                         .font(.subheadline.weight(.semibold))
                     Text(draftLevel, format: .percent.precision(.fractionLength(0)))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    if showsDecibels {
+                        Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button {
-                    Task { await remote.setGoXLRMuted(id: channel.id, muted: !channel.isMuted) }
+                    Task { await store.toggleMute(channelId: channel.id) }
                 } label: {
                     Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
                 }
                 .buttonStyle(.plain)
-                .disabled(!remote.pairingState.isPaired)
+                .disabled(!store.controlsAreAvailable)
             }
             Slider(value: $draftLevel, in: 0...1) { editing in
                 if !editing {
-                    Task { await remote.setGoXLRLevel(id: channel.id, level: draftLevel) }
+                    store.updateVolumeDraft(channelId: channel.id, value: draftLevel)
+                    Task { await store.setVolume(channelId: channel.id, value: draftLevel) }
                 }
             }
             .tint(tint)
-            .disabled(!remote.pairingState.isPaired)
+            .disabled(!store.controlsAreAvailable)
         }
         .padding(DesignToken.Spacing.small)
         .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.08))
-        .onChange(of: channel.level) { _, level in
+        .onChange(of: channel.volume) { _, level in
             draftLevel = level
         }
     }

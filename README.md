@@ -22,6 +22,7 @@ Open `DeckApp.xcodeproj` in Xcode 26 or newer, select the `DeckApp` scheme, and 
 - Versioned mock Windows Agent protocol with pairing, Keychain credential storage, revocation, permission/emergency states, and keyboard/touchpad Remote foundation
 - Mock Windows application/game, audio-session, and GoXLR capability inventory
 - State-confirmed mock application launch, per-session audio, and GoXLR channel controls with visible command lifecycle
+- Live GoXLR channel controls, transient audio meters, adaptive mixer UI, and Windows endpoint mapping through the paired Agent
 - Phase 7 Windows-only .NET 10 Agent with HTTPS-only startup, private-network enforcement, cryptographic pairing, credential revocation, local safety controls, authenticated WebSocket input, and guarded `SendInput` injection
 - Optional live iOS Windows Agent transport with REST pairing, separate Keychain credential, authenticated `wss://` input batches, acknowledgements, latency measurement, and automatic safety-state monitoring
 - Strict Windows Agent endpoint diagnostics that reject HTTP, loopback, embedded credentials, query data, and fragments while identifying Local, VPN, and Remote routes
@@ -39,10 +40,10 @@ Open `DeckApp.xcodeproj` in Xcode 26 or newer, select the `DeckApp` scheme, and 
 - Home Assistant script routing for Launch Game/Sleep PC and sanitized integration-health diagnostics
 - Adaptive Home Assistant Scenes screen with favorites and observable orchestration progress
 
-Unmapped device widgets are intentionally labeled `MOCK`. Mapped light, climate, TV, and smart-plug widgets are labeled `LIVE` and use Home Assistant. GoXLR and rich Windows capabilities remain mocked, while Remote Settings can select the live Windows Agent for keyboard and pointer input. The development pairing code is `482913`; it is only for the in-app mock and is not used by the real Agent.
+Unmapped device widgets are intentionally labeled `MOCK`. Mapped light, climate, TV, and smart-plug widgets are labeled `LIVE` and use Home Assistant. GoXLR widgets can use either mock data or the paired Windows Agent, while Remote Settings selects the live Agent for keyboard, pointer, controls, and metering. The development pairing code is `482913`; it is only for the in-app mock and is not used by the real Agent.
 
 The Windows project and PC-side setup notes are in [WindowsAgent](WindowsAgent/README.md).
 
-See [the architecture](docs/architecture.md) and [the product specification](docs/product-spec.md) for details.
+See [the architecture](docs/architecture.md), [the product specification](docs/product-spec.md), and [GoXLR live audio meters](docs/goxlr-live-meters.md) for details.
 
 For PC setup, see [Connecting Bitfocus Companion](docs/companion-setup.md).

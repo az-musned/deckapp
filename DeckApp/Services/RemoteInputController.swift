@@ -18,6 +18,7 @@ final class RemoteInputController {
     var pairingMessage = ""
     var capabilitySnapshot: WindowsAgentCapabilitySnapshot?
     var agentCommandExecution: WindowsAgentCommandExecution?
+    let goXLR = GoXLRStore()
     var usesMockAgent = true
     var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
     var windowsAgentLocalAddress = ""
@@ -87,6 +88,7 @@ final class RemoteInputController {
            let saved = try? JSONDecoder().decode(RemoteInputPreferences.self, from: data) {
             preferences = saved
         }
+        goXLR.attach(controller: self)
     }
 
     func savePreferences() {
@@ -123,6 +125,7 @@ final class RemoteInputController {
             : "Using the authenticated Windows Agent transport."
         savePreferences()
         await refreshAgentSecurityState()
+        await goXLR.agentConfigurationChanged()
     }
 
     private var configuredAgentAddresses: [String] {
@@ -173,6 +176,7 @@ final class RemoteInputController {
             && snapshot.audioSessions.isEmpty
             && snapshot.goXLRChannels.isEmpty
             && !snapshot.goXLRConnected ? nil : snapshot
+        goXLR.syncControlChannels(snapshot.goXLRChannels)
     }
 
     func beginPairing() async {
@@ -208,6 +212,7 @@ final class RemoteInputController {
 
     func revokePairing() async {
         await disconnect()
+        await goXLR.agentDidDisconnect()
         await service.revokePairing()
         try? pairingKeychain.delete(account: pairingCredentialAccount)
         pairingState = .revoked
@@ -479,6 +484,7 @@ final class RemoteInputController {
         do {
             let result = try await service.perform(command)
             capabilitySnapshot = result.snapshot
+            goXLR.syncControlChannels(result.snapshot.goXLRChannels)
             execution.status = result.confirmed ? .confirmed : .failed
             execution.message = result.message
         } catch WindowsRemoteInputError.unpairedClient {
@@ -618,5 +624,13 @@ final class RemoteInputController {
 
     private var pairingCredentialAccount: String {
         usesMockAgent ? "pairing-credential.mock" : "pairing-credential.live"
+    }
+
+    var goXLRAudioConfiguration: GoXLRAudioConfiguration? {
+        guard !usesMockAgent,
+              !configuredAgentAddresses.isEmpty,
+              let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
+              !credential.isEmpty else { return nil }
+        return GoXLRAudioConfiguration(addresses: configuredAgentAddresses, credential: credential)
     }
 }
