@@ -803,31 +803,10 @@ private struct LiveGoXLRWidget: View {
             )
 
             if snapshot?.goXLRConnected == true {
-                if definition.size.presentationDensity == .expanded {
-                    Label(
-                        meterStore.meterStreamIsStale ? "Live meters stale" : meterStore.meterConnectionState.title,
-                        systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
-                    )
-                    .font(.caption2)
-                    .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
-                }
                 if definition.size.presentationDensity == .compact {
                     compactMeters
                 } else {
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: DesignToken.Spacing.small) {
-                            ForEach(visibleChannels) { channel in
-                                LiveGoXLRChannelRow(
-                                    store: meterStore,
-                                    channel: channel,
-                                    tint: Color.controlDeckTint(named: definition.tintName),
-                                    showsDecibels: definition.size.presentationDensity == .expanded
-                                )
-                                .frame(width: compact ? 155 : 190)
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
+                    faderBank
                 }
             } else {
                 Label(
@@ -859,12 +838,41 @@ private struct LiveGoXLRWidget: View {
     private var meterStore: GoXLRStore { appState.remoteInput.goXLR }
 
     private var visibleChannels: [GoXLRChannelState] {
-        let limit = switch definition.size.presentationDensity {
-        case .compact: min(4, meterStore.channels.count)
-        case .standard: min(6, meterStore.channels.count)
-        case .expanded: meterStore.channels.count
+        let selectedIDs = definition.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+        let selected = selectedIDs.compactMap { selectedID in
+            meterStore.channels.first { $0.id.caseInsensitiveCompare(selectedID) == .orderedSame }
         }
-        return Array(meterStore.channels.prefix(limit))
+        return definition.size.presentationDensity == .compact ? Array(selected.prefix(4)) : selected
+    }
+
+    @ViewBuilder
+    private var faderBank: some View {
+        if visibleChannels.count <= 4 {
+            HStack(spacing: DesignToken.Spacing.small) {
+                ForEach(visibleChannels) { channel in
+                    LiveGoXLRVerticalFader(
+                        store: meterStore,
+                        channel: channel,
+                        tint: Color.controlDeckTint(named: definition.tintName)
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        } else {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannels) { channel in
+                        LiveGoXLRVerticalFader(
+                            store: meterStore,
+                            channel: channel,
+                            tint: Color.controlDeckTint(named: definition.tintName)
+                        )
+                        .frame(width: compact ? 66 : 78)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
     }
 
     private var compactMeters: some View {
@@ -895,24 +903,27 @@ private struct LiveGoXLRWidget: View {
     }
 }
 
-private struct LiveGoXLRChannelRow: View {
+private struct LiveGoXLRVerticalFader: View {
     let store: GoXLRStore
     let channel: GoXLRChannelState
     let tint: Color
-    let showsDecibels: Bool
     @State private var draftLevel: Double
 
-    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color, showsDecibels: Bool) {
+    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color) {
         self.store = store
         self.channel = channel
         self.tint = tint
-        self.showsDecibels = showsDecibels
         _draftLevel = State(initialValue: channel.volume)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
-            HStack(alignment: .center) {
+        VStack(spacing: 5) {
+            Text(channel.displayName)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            HStack(spacing: 6) {
                 AudioLevelMeterView(
                     level: channel.displayLevel,
                     peakHold: channel.peakHold,
@@ -922,42 +933,82 @@ private struct LiveGoXLRChannelRow: View {
                     decibels: channel.decibels,
                     channelName: channel.displayName
                 )
-                .frame(width: 16, height: 54)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(channel.displayName)
-                        .font(.subheadline.weight(.semibold))
-                    Text(draftLevel, format: .percent.precision(.fractionLength(0)))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    if showsDecibels {
-                        Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Button {
-                    Task { await store.toggleMute(channelId: channel.id) }
-                } label: {
-                    Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
-                }
-                .buttonStyle(.plain)
-                .disabled(!store.controlsAreAvailable)
-            }
-            Slider(value: $draftLevel, in: 0...1) { editing in
-                if !editing {
+                .frame(width: 10, height: 92)
+
+                GoXLRVerticalSlider(value: $draftLevel, tint: tint) {
                     store.updateVolumeDraft(channelId: channel.id, value: draftLevel)
                     Task { await store.setVolume(channelId: channel.id, value: draftLevel) }
                 }
+                .frame(width: 28, height: 96)
+                .disabled(!store.controlsAreAvailable)
             }
-            .tint(tint)
+
+            Button {
+                Task { await store.toggleMute(channelId: channel.id) }
+            } label: {
+                Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : .secondary)
+                    .frame(maxWidth: .infinity, minHeight: 28)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.subtle, cornerRadius: 8, tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.12) : tint.opacity(0.06))
             .disabled(!store.controlsAreAvailable)
         }
-        .padding(DesignToken.Spacing.small)
-        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.08))
         .onChange(of: channel.volume) { _, level in
             draftLevel = level
+        }
+    }
+}
+
+private struct GoXLRVerticalSlider: View {
+    @Binding var value: Double
+    let tint: Color
+    let commit: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let knobHeight = 12.0
+            let travel = max(1, geometry.size.height - knobHeight)
+            let normalizedValue = min(max(value.isFinite ? value : 0, 0), 1)
+            let y = (1 - normalizedValue) * travel
+
+            ZStack(alignment: .top) {
+                Capsule()
+                    .fill(.black.opacity(0.28))
+                    .frame(width: 5)
+                    .frame(maxHeight: .infinity)
+                Capsule()
+                    .fill(tint.opacity(0.55))
+                    .frame(width: 5, height: max(3, normalizedValue * travel))
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.92))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.25), lineWidth: 1))
+                    .shadow(color: tint.opacity(0.35), radius: 4)
+                    .frame(width: 24, height: knobHeight)
+                    .offset(y: y)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        value = min(max(1.0 - Double(gesture.location.y / geometry.size.height), 0), 1)
+                    }
+                    .onEnded { _ in commit() }
+            )
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Volume")
+        .accessibilityValue(Text(value, format: .percent.precision(.fractionLength(0))))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(1, value + 0.05)
+            case .decrement: value = max(0, value - 0.05)
+            @unknown default: return
+            }
+            commit()
         }
     }
 }
@@ -974,51 +1025,91 @@ private struct MockGoXLRWidget: View {
                 availability: appState.mockRoomControl.goXLR.isConnected ? .available : .unavailable
             )
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: compact ? 130 : 180), spacing: DesignToken.Spacing.medium)]) {
-                ForEach(visibleChannelIndices, id: \.self) { index in
-                    mixerChannel(index: index)
+            if definition.size.presentationDensity == .compact {
+                HStack(alignment: .bottom, spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannelIndices.prefix(4), id: \.self) { index in
+                        VStack(spacing: 3) {
+                            mockMeter(index: index).frame(width: 18, height: 52)
+                            Text(String(appState.mockRoomControl.goXLR.channels[index].name.prefix(4)))
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
+            } else if visibleChannelIndices.count <= 4 {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannelIndices, id: \.self) { index in
+                        mixerChannel(index: index).frame(maxWidth: .infinity)
+                    }
+                }
+            } else {
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: DesignToken.Spacing.small) {
+                        ForEach(visibleChannelIndices, id: \.self) { index in
+                            mixerChannel(index: index).frame(width: compact ? 66 : 78)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
             }
         }
     }
 
     private var visibleChannelIndices: [Int] {
-        let limit = switch definition.size.presentationDensity {
-        case .compact: 1
-        case .standard: 2
-        case .expanded: appState.mockRoomControl.goXLR.channels.count
+        let selectedIDs = definition.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+        return selectedIDs.compactMap { selectedID in
+            appState.mockRoomControl.goXLR.channels.firstIndex {
+                $0.id.caseInsensitiveCompare(selectedID) == .orderedSame
+            }
         }
-        return Array(appState.mockRoomControl.goXLR.channels.indices.prefix(limit))
     }
 
     private func mixerChannel(index: Int) -> some View {
-        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
-            HStack {
-                Text(appState.mockRoomControl.goXLR.channels[index].name)
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button {
-                    appState.mockRoomControl.goXLR.channels[index].isMuted.toggle()
-                    Task { await appState.confirmMockControl("GoXLR mute") }
-                } label: {
-                    Image(systemName: appState.mockRoomControl.goXLR.channels[index].isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundStyle(appState.mockRoomControl.goXLR.channels[index].isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
+        let channel = appState.mockRoomControl.goXLR.channels[index]
+        return VStack(spacing: 5) {
+            Text(channel.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 6) {
+                mockMeter(index: index).frame(width: 10, height: 92)
+                GoXLRVerticalSlider(
+                    value: Binding(
+                        get: { appState.mockRoomControl.goXLR.channels[index].level },
+                        set: { appState.mockRoomControl.goXLR.channels[index].level = $0 }
+                    ),
+                    tint: Color.controlDeckTint(named: definition.tintName)
+                ) {
+                    Task { await appState.confirmMockControl("GoXLR channel level") }
                 }
-                .buttonStyle(.plain)
+                .frame(width: 28, height: 96)
             }
-            Slider(
-                value: Binding(
-                    get: { appState.mockRoomControl.goXLR.channels[index].level },
-                    set: { appState.mockRoomControl.goXLR.channels[index].level = $0 }
-                ),
-                in: 0...1
-            ) { editing in
-                if !editing { Task { await appState.confirmMockControl("GoXLR channel level") } }
+            Button {
+                appState.mockRoomControl.goXLR.channels[index].isMuted.toggle()
+                Task { await appState.confirmMockControl("GoXLR mute") }
+            } label: {
+                Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : .secondary)
+                    .frame(maxWidth: .infinity, minHeight: 28)
             }
-            .tint(Color.controlDeckTint(named: definition.tintName))
+            .buttonStyle(.plain)
+            .glassSurface(.subtle, cornerRadius: 8, tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.12) : Color.clear)
         }
-        .padding(DesignToken.Spacing.small)
-        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: Color.controlDeckTint(named: definition.tintName).opacity(0.08))
+    }
+
+    private func mockMeter(index: Int) -> some View {
+        let channel = appState.mockRoomControl.goXLR.channels[index]
+        return AudioLevelMeterView(
+            level: channel.level * 0.82,
+            peakHold: channel.level * 0.9,
+            isClipping: false,
+            isAvailable: appState.mockRoomControl.goXLR.isConnected,
+            isStale: false,
+            decibels: -60 + (channel.level * 60),
+            channelName: channel.name
+        )
     }
 }
 

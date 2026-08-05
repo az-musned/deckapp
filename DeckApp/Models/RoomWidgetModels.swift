@@ -76,6 +76,8 @@ struct WidgetBackendReference: Codable, Sendable, Equatable {
 }
 
 struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
+    static let defaultGoXLRChannelIDs = ["mic", "chat", "music", "system"]
+
     let id: UUID
     var title: String
     var subtitle: String
@@ -87,6 +89,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
     var capabilities: [DeviceCapabilityDescriptor]
     var phoneSize: RoomWidgetSize?
     var padSize: RoomWidgetSize?
+    /// Nil keeps older saved layouts on the four physical GoXLR-style defaults.
+    var audioMixerChannelIDs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -99,7 +103,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         backend: WidgetBackendReference,
         capabilities: [DeviceCapabilityDescriptor],
         phoneSize: RoomWidgetSize? = nil,
-        padSize: RoomWidgetSize? = nil
+        padSize: RoomWidgetSize? = nil,
+        audioMixerChannelIDs: [String]? = nil
     ) {
         self.id = id
         self.title = title
@@ -112,6 +117,7 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.phoneSize = phoneSize
         self.padSize = padSize
+        self.audioMixerChannelIDs = audioMixerChannelIDs
     }
 
     func resolvedSize(for layoutClass: RoomWidgetLayoutClass) -> RoomWidgetSize {
@@ -132,7 +138,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
             backend: backend,
             capabilities: capabilities,
             phoneSize: phoneSize,
-            padSize: padSize
+            padSize: padSize,
+            audioMixerChannelIDs: audioMixerChannelIDs
         )
     }
 }
@@ -216,7 +223,8 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 kind: .audioMixer,
                 size: .wide,
                 backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.goxlr"),
-                capabilities: MockCapabilities.audioMixer
+                capabilities: MockCapabilities.audioMixer,
+                audioMixerChannelIDs: RoomWidgetDefinition.defaultGoXLRChannelIDs
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,

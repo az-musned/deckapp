@@ -257,6 +257,19 @@ private struct WidgetConfigurationView: View {
                     } footer: {
                         Text("The live source uses the paired HTTPS Windows Agent. GoXLR Utility must already be running on the PC; DeckApp never starts it or switches device managers.")
                     }
+
+                    Section {
+                        ForEach(audioMixerChannelOptions) { channel in
+                            Toggle(channel.name, isOn: audioMixerChannelBinding(channel.id))
+                        }
+                        Button("Use Default Four", systemImage: "arrow.counterclockwise") {
+                            widget.audioMixerChannelIDs = RoomWidgetDefinition.defaultGoXLRChannelIDs
+                        }
+                    } header: {
+                        Text("Visible Faders")
+                    } footer: {
+                        Text("Mic, Chat, Music, and System are shown by default. Select more channels to add faders; extra faders scroll horizontally inside the widget.")
+                    }
                 } else {
                     Section {
                         LabeledContent("Backend", value: widget.backend.backend.title)
@@ -293,6 +306,11 @@ private struct WidgetConfigurationView: View {
                         dismiss()
                     }
                     .disabled(widget.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .task {
+                if widget.kind == .audioMixer, widget.backend.backend == .windowsAgent {
+                    await appState.remoteInput.goXLR.refreshChannels()
                 }
             }
         }
@@ -355,6 +373,51 @@ private struct WidgetConfigurationView: View {
             }
         }
     }
+
+    private var selectedAudioMixerChannelIDs: [String] {
+        widget.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+    }
+
+    private var audioMixerChannelOptions: [AudioMixerChannelOption] {
+        let discovered: [AudioMixerChannelOption]
+        if widget.backend.backend == .windowsAgent, !appState.remoteInput.goXLR.channels.isEmpty {
+            discovered = appState.remoteInput.goXLR.channels.map {
+                AudioMixerChannelOption(id: $0.id, name: $0.displayName)
+            }
+        } else {
+            discovered = appState.mockRoomControl.goXLR.channels.map {
+                AudioMixerChannelOption(id: $0.id, name: $0.name)
+            }
+        }
+
+        let missingSelections = selectedAudioMixerChannelIDs
+            .filter { selectedID in
+                !discovered.contains { $0.id.caseInsensitiveCompare(selectedID) == .orderedSame }
+            }
+            .map { AudioMixerChannelOption(id: $0, name: $0.replacingOccurrences(of: "_", with: " ").capitalized) }
+        return discovered + missingSelections
+    }
+
+    private func audioMixerChannelBinding(_ channelID: String) -> Binding<Bool> {
+        Binding {
+            selectedAudioMixerChannelIDs.contains { $0.caseInsensitiveCompare(channelID) == .orderedSame }
+        } set: { isSelected in
+            var selected = selectedAudioMixerChannelIDs
+            if isSelected {
+                if !selected.contains(where: { $0.caseInsensitiveCompare(channelID) == .orderedSame }) {
+                    selected.append(channelID)
+                }
+            } else if selected.count > 1 {
+                selected.removeAll { $0.caseInsensitiveCompare(channelID) == .orderedSame }
+            }
+            widget.audioMixerChannelIDs = selected
+        }
+    }
+}
+
+private struct AudioMixerChannelOption: Identifiable {
+    let id: String
+    let name: String
 }
 
 private extension RoomWidgetKind {
