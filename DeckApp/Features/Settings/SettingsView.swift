@@ -174,7 +174,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    TextField("PC address, for example 192.168.1.50:8000", text: companionAddressBinding)
+                    TextField("PC address, for example 100.x.y.z:8000", text: companionAddressBinding)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
@@ -214,13 +214,13 @@ struct SettingsView: View {
                             || appState.companionStatus == .testing
                     )
 
-                    Text("Companion is allowed only over your home LAN or a private VPN such as Tailscale. DeckApp rejects public Companion addresses.")
+                    Text("Companion is allowed only over your home LAN or a private VPN. Use the PC's Tailscale IP for the same macro address on home Wi-Fi and 5G. DeckApp rejects public addresses.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Bitfocus Companion")
                 } footer: {
-                    Text("Enable Companion’s HTTP remote-control API on the PC and use the same IP address and port as its web interface. Never forward this port on your router.")
+                    Text("Enable Companion’s HTTP API and permit port 8000 only on the Tailscale interface. Never forward this port on your router.")
                 }
 
                 Section {

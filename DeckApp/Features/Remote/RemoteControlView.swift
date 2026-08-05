@@ -582,11 +582,11 @@ private struct RemoteInputSettingsView: View {
                     .pickerStyle(.segmented)
 
                     if !remote.usesMockAgent {
-                        TextField("https://192.168.1.50:8732", text: $remote.windowsAgentAddress)
+                        TextField("https://100.x.y.z:8732", text: $remote.windowsAgentAddress)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        Text("HTTPS is required. The certificate must be trusted by this iPhone or iPad and must match the address. TLS validation is never disabled.")
+                        Text("For one low-latency address at home and on cellular, use the PC's Tailscale IP. Keep Tailscale enabled on both devices. HTTPS is required and TLS validation is never disabled.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

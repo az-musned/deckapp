@@ -30,6 +30,16 @@ The iOS app can now select this live transport from Remote Settings, pair throug
 7. Run `dotnet run --project WindowsAgent/DeckWindowsAgent.Validation/DeckWindowsAgent.Validation.csproj`.
 8. Run the Agent from a visible local console during development.
 
+## Home mesh and cellular access
+
+For one private address that works on home Wi-Fi and 5G, install and sign in to Tailscale on the Windows PC and iPhone/iPad. Then run PowerShell as Administrator:
+
+`powershell -ExecutionPolicy Bypass -File WindowsAgent\scripts\Configure-TailscaleConnection.ps1 -AllowCompanion`
+
+The script selects the PC's active `100.64.0.0/10` Tailscale address, creates a TLS certificate for that exact IP, preserves existing Windows audio/GoXLR/application capability settings, and limits inbound firewall rules to the Tailscale interface and tailnet address range. It prints the Agent and optional Companion addresses to enter in DeckApp. Install and explicitly trust the exported public root certificate on each iPhone/iPad.
+
+Enable Tailscale VPN On Demand for Wi-Fi and cellular on iOS so the private route remains available after path changes. For latency checks, run `tailscale ping <iphone-or-ipad-name>` on the PC. A `direct` path is preferred; a `DERP` path is encrypted but can have higher latency. DeckApp never requires an exit node for this connection.
+
 Press `I` locally to enable/disable remote input, `E` for emergency disable, `P` to list paired devices, or `R` to revoke one. Keep the console visible during this development phase.
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
