@@ -16,9 +16,6 @@ nonisolated struct AudioMeterChannelPayload: Codable, Identifiable, Sendable, Eq
     let displayLevel: Double
     let peakHold: Double
     let clipping: Bool
-    /// Optional control state lets newer Agents fold physical fader changes into the live stream.
-    var level: Double? = nil
-    var isMuted: Bool? = nil
 
     var clamped: Self {
         Self(
@@ -29,9 +26,7 @@ nonisolated struct AudioMeterChannelPayload: Codable, Identifiable, Sendable, Eq
             decibels: decibels.isFinite ? decibels : -120,
             displayLevel: displayLevel.clampedToUnitInterval,
             peakHold: peakHold.clampedToUnitInterval,
-            clipping: clipping,
-            level: level.map(\.clampedToUnitInterval),
-            isMuted: isMuted
+            clipping: clipping
         )
     }
 }
@@ -179,8 +174,7 @@ nonisolated enum GoXLRChannelStateReducer {
     static func apply(
         _ message: AudioMetersMessage,
         to channels: inout [GoXLRChannelState],
-        now: Date,
-        preservingControlIDs: Set<String> = []
+        now: Date
     ) {
         var indices: [String: Int] = [:]
         for index in channels.indices {
@@ -204,10 +198,6 @@ nonisolated enum GoXLRChannelStateReducer {
             channels[index].peakHold = payload.peakHold
             channels[index].isClipping = payload.clipping
             channels[index].lastMeterUpdate = now
-            if !preservingControlIDs.contains(payloadKey) {
-                if let level = payload.level { channels[index].volume = level }
-                if let isMuted = payload.isMuted { channels[index].isMuted = isMuted }
-            }
         }
     }
 

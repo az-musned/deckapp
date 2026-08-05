@@ -252,15 +252,7 @@ final class GoXLRStore {
         let now = Date()
         lastMessageDate = now
         meterStreamIsStale = false
-        let protectedIDs = activeVolumeInteractions.union(
-            pendingVolumeTargets.compactMap { key, target in target.expiresAt > now ? key : nil }
-        )
-        GoXLRChannelStateReducer.apply(
-            message,
-            to: &channels,
-            now: now,
-            preservingControlIDs: protectedIDs
-        )
+        GoXLRChannelStateReducer.apply(message, to: &channels, now: now)
     }
 
     func updateStaleness(now: Date) {
