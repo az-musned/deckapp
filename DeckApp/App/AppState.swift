@@ -1027,6 +1027,7 @@ final class AppState {
     func configureLayoutPersistence(_ context: ModelContext) {
         guard modelContext == nil else { return }
         modelContext = context
+        var migratedGoXLRWidget = false
 
         let templateID = roomControlTemplate.id
         var descriptor = FetchDescriptor<DashboardLayoutRecord>(
@@ -1062,6 +1063,20 @@ final class AppState {
         configureMappedWidget(kind: .television, entityID: homeAssistantTelevisionEntityID)
         refreshTelevisionCapabilities()
         configureMappedWidget(kind: .pcPower, entityID: homeAssistantPCPowerEntityID)
+        if !remoteInput.usesMockAgent,
+           let index = roomControlTemplate.widgets.firstIndex(where: {
+               $0.kind == .audioMixer
+                   && $0.backend.backend == .mock
+                   && $0.backend.identifier == "mock.audio.goxlr"
+           }) {
+            roomControlTemplate.widgets[index].backend = WidgetBackendReference(
+                backend: .windowsAgent,
+                identifier: "windows-agent.goxlr"
+            )
+            roomControlTemplate.widgets[index].subtitle = "Authenticated Windows Agent mixer"
+            migratedGoXLRWidget = true
+        }
+        if migratedGoXLRWidget { saveRoomControlLayout() }
     }
 
     func saveRoomControlLayout() {

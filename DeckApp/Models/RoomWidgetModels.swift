@@ -210,12 +210,12 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A107")!,
                 title: "GoXLR Mini",
-                subtitle: "Mock Windows Agent mixer",
+                subtitle: "Authenticated Windows Agent mixer",
                 symbol: "slider.vertical.3",
                 tintName: "green",
                 kind: .audioMixer,
                 size: .wide,
-                backend: WidgetBackendReference(backend: .mock, identifier: "mock.audio.goxlr"),
+                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.goxlr"),
                 capabilities: MockCapabilities.audioMixer
             ),
             RoomWidgetDefinition(

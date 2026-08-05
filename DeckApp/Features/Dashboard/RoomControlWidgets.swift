@@ -20,7 +20,7 @@ struct RoomControlWidgetView: View {
         case .pcPower:
             MockPCPowerWidget(definition: definition)
         case .audioMixer:
-            MockGoXLRWidget(definition: definition, compact: compact)
+            GoXLRWidget(definition: definition, compact: compact)
         case .companionActions:
             CompanionActionsWidget(definition: definition, compact: compact)
         case .remoteInputLauncher:
@@ -773,6 +773,121 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct GoXLRWidget: View {
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        if definition.backend.backend == .windowsAgent {
+            LiveGoXLRWidget(definition: definition, compact: compact)
+        } else {
+            MockGoXLRWidget(definition: definition, compact: compact)
+        }
+    }
+}
+
+private struct LiveGoXLRWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(
+                definition: definition,
+                availability: snapshot?.goXLRConnected == true ? .available : .unavailable
+            )
+
+            if let snapshot, snapshot.goXLRConnected {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: compact ? 130 : 180), spacing: DesignToken.Spacing.medium)]) {
+                    ForEach(visibleChannels(snapshot.goXLRChannels)) { channel in
+                        LiveGoXLRChannelRow(
+                            remote: appState.remoteInput,
+                            channel: channel,
+                            tint: Color.controlDeckTint(named: definition.tintName)
+                        )
+                    }
+                }
+            } else {
+                Label(
+                    appState.remoteInput.pairingState.isPaired
+                        ? "GoXLR Utility is unavailable on the PC"
+                        : "Pair the Windows Agent to load GoXLR",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task {
+            await appState.remoteInput.refreshAgentSecurityState()
+        }
+    }
+
+    private var snapshot: WindowsAgentCapabilitySnapshot? {
+        appState.remoteInput.capabilitySnapshot
+    }
+
+    private func visibleChannels(_ channels: [WindowsGoXLRChannelState]) -> [WindowsGoXLRChannelState] {
+        let limit = switch definition.size.presentationDensity {
+        case .compact: 1
+        case .standard: 2
+        case .expanded: channels.count
+        }
+        return Array(channels.prefix(limit))
+    }
+}
+
+private struct LiveGoXLRChannelRow: View {
+    let remote: RemoteInputController
+    let channel: WindowsGoXLRChannelState
+    let tint: Color
+    @State private var draftLevel: Double
+
+    init(remote: RemoteInputController, channel: WindowsGoXLRChannelState, tint: Color) {
+        self.remote = remote
+        self.channel = channel
+        self.tint = tint
+        _draftLevel = State(initialValue: channel.level)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(channel.name)
+                        .font(.subheadline.weight(.semibold))
+                    Text(draftLevel, format: .percent.precision(.fractionLength(0)))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    Task { await remote.setGoXLRMuted(id: channel.id, muted: !channel.isMuted) }
+                } label: {
+                    Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
+                }
+                .buttonStyle(.plain)
+                .disabled(!remote.pairingState.isPaired)
+            }
+            Slider(value: $draftLevel, in: 0...1) { editing in
+                if !editing {
+                    Task { await remote.setGoXLRLevel(id: channel.id, level: draftLevel) }
+                }
+            }
+            .tint(tint)
+            .disabled(!remote.pairingState.isPaired)
+        }
+        .padding(DesignToken.Spacing.small)
+        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.08))
+        .onChange(of: channel.level) { _, level in
+            draftLevel = level
+        }
     }
 }
 

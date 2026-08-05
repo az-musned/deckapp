@@ -43,6 +43,9 @@ struct RoomControlValidation {
         precondition(pcPower.capabilities.contains { $0.id == "start_pc" })
         precondition(!pcPower.capabilities.contains { $0.id == "turn_off_plug" })
 
+        let goXLR = template.widgets.first { $0.kind == .audioMixer }!
+        precondition(goXLR.backend.backend == .windowsAgent)
+
         precondition(RoomWidgetSize.medium.columnSpan(in: 4) == 2)
         precondition(RoomWidgetSize.wide.columnSpan(in: 4) == 4)
         precondition(RoomWidgetSize.wide.columnSpan(in: 2) == 2)

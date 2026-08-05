@@ -246,6 +246,17 @@ private struct WidgetConfigurationView: View {
                     } footer: {
                         Text("Govee widgets automatically use only the controls reported by the selected device. Choose a larger widget size to show more controls.")
                     }
+                } else if widget.kind == .audioMixer {
+                    Section {
+                        Picker("Source", selection: audioMixerSourceBinding) {
+                            Text("Windows Agent · GoXLR").tag(WidgetBackendKind.windowsAgent)
+                            Text("Mock Mixer").tag(WidgetBackendKind.mock)
+                        }
+                    } header: {
+                        Text("Device Mapping")
+                    } footer: {
+                        Text("The live source uses the paired HTTPS Windows Agent. GoXLR Utility must already be running on the PC; DeckApp never starts it or switches device managers.")
+                    }
                 } else {
                     Section {
                         LabeledContent("Backend", value: widget.backend.backend.title)
@@ -326,6 +337,21 @@ private struct WidgetConfigurationView: View {
                 widget.subtitle = "Govee · \(device.deviceName)"
                 widget.capabilities = device.actionableCapabilities.map(\.descriptor)
                 if widget.title == "Room Lights" { widget.title = device.deviceName }
+            }
+        }
+    }
+
+    private var audioMixerSourceBinding: Binding<WidgetBackendKind> {
+        Binding {
+            widget.backend.backend == .windowsAgent ? .windowsAgent : .mock
+        } set: { source in
+            switch source {
+            case .windowsAgent:
+                widget.backend = WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.goxlr")
+                widget.subtitle = "Authenticated Windows Agent mixer"
+            default:
+                widget.backend = WidgetBackendReference(backend: .mock, identifier: "mock.audio.goxlr")
+                widget.subtitle = "Mock GoXLR mixer"
             }
         }
     }

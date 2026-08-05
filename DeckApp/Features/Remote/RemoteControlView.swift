@@ -394,7 +394,7 @@ private struct RemoteMediaPanel: View {
 
                 Text(remote.usesMockAgent
                      ? "Mock Agent controls. A command is confirmed only after the Agent reports the expected state; request acceptance alone is never shown as success."
-                     : "Media keys use the authenticated input session. Stateful app, audio-session, and GoXLR capabilities will appear after their real Agent endpoints are implemented.")
+                     : "Media keys use the authenticated input session. Applications, Windows audio sessions, and GoXLR controls use paired HTTPS capability endpoints.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -689,7 +689,7 @@ private struct RemoteInputSettingsView: View {
 
                     Text(remote.usesMockAgent
                          ? "Development-only sample data. These capabilities define the authenticated Windows Agent contract; they do not control the PC yet."
-                         : "The real Agent currently provides keyboard and pointer input. Stateful application, audio-session, and GoXLR endpoints are not enabled yet.")
+                         : "The real Agent provides keyboard and pointer input plus paired application, Windows audio-session, and GoXLR capability endpoints.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
