@@ -794,6 +794,7 @@ private struct LiveGoXLRWidget: View {
     let definition: RoomWidgetDefinition
     let compact: Bool
     @State private var showingMixer = false
+    @State private var showingMappings = false
 
     var body: some View {
         DashboardCard {
@@ -803,6 +804,22 @@ private struct LiveGoXLRWidget: View {
             )
 
             if snapshot?.goXLRConnected == true {
+                if definition.size.presentationDensity != .compact {
+                    HStack(spacing: DesignToken.Spacing.small) {
+                        Label(
+                            meterStore.meterStreamIsStale ? "Meters need attention" : "Live meters",
+                            systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
+                        )
+                        .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
+                        Spacer()
+                        Button("Map Meters", systemImage: "point.3.connected.trianglepath.dotted") {
+                            showingMappings = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .font(.caption2.weight(.semibold))
+                }
                 if definition.size.presentationDensity == .compact {
                     compactMeters
                 } else {
@@ -823,6 +840,7 @@ private struct LiveGoXLRWidget: View {
         .contentShape(Rectangle())
         .onTapGesture { if definition.size.presentationDensity == .compact { showingMixer = true } }
         .sheet(isPresented: $showingMixer) { GoXLRMixerView(store: meterStore) }
+        .sheet(isPresented: $showingMappings) { GoXLREndpointMappingView(store: meterStore) }
         .task {
             await appState.remoteInput.refreshAgentSecurityState()
             await meterStore.startMetering()

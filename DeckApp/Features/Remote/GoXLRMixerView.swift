@@ -91,6 +91,11 @@ struct GoXLRMixerView: View {
                     .foregroundStyle(store.controlsAreAvailable ? DesignToken.Color.positive : .secondary)
                     Spacer()
                     meterStatus
+                    Button("Mappings", systemImage: "point.3.connected.trianglepath.dotted") {
+                        showingMappings = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
                 .font(.caption)
                 .padding(.horizontal)
@@ -201,7 +206,7 @@ struct GoXLRMixerView: View {
     }
 }
 
-private struct GoXLREndpointMappingView: View {
+struct GoXLREndpointMappingView: View {
     @Environment(\.dismiss) private var dismiss
     let store: GoXLRStore
 
