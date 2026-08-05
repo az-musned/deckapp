@@ -55,7 +55,7 @@ Press `I` locally to enable/disable remote input, `E` for emergency disable, `P`
 
 Windows audio discovery reads the active sessions on the default multimedia output endpoint. The returned IDs are opaque hashes and the Agent supports per-session volume and mute with state readback.
 
-GoXLR support uses the community [GoXLR Utility](https://github.com/GoXLR-on-Linux/goxlr-utility) client/API. If `C:\Program Files\GoXLR Utility\goxlr-client.exe` exists it is discovered automatically, or set an absolute `GoXlrClientPath`. The GoXLR Utility daemon must already be managing the device. Do not run it alongside another manager that owns the GoXLR; when unavailable, the Agent reports `goXlrConnected: false` and makes no device change. Channel levels are 0–1 on the Deck protocol and 0–100 in GoXLR Utility. Mute is exposed only for a channel assigned to a physical fader.
+GoXLR support uses the community [GoXLR Utility](https://github.com/GoXLR-on-Linux/goxlr-utility) client/API. If `C:\Program Files\GoXLR Utility\goxlr-client.exe` exists it is discovered automatically, or set an absolute `GoXlrClientPath`. The GoXLR Utility daemon must already be managing the device. Do not run it alongside another manager that owns the GoXLR; when unavailable, the Agent reports `goXlrConnected: false` and makes no device change. Channel levels are 0–1 on the Deck protocol. GoXLR Utility status reports raw 0–255 fader values while its CLI accepts 0–100 percentages. Mute is exposed only for a channel assigned to a physical fader.
 
 Applications and games must be explicitly allowlisted in ignored `appsettings.Local.json`:
 

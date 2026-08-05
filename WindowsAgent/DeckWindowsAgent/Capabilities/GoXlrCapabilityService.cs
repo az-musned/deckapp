@@ -62,7 +62,9 @@ public sealed class GoXlrCapabilityService(AgentOptions options) : IGoXlrCapabil
             .Select(volume =>
             {
                 var id = NormalizeChannel(volume.Name);
-                var level = volume.Value.GetDouble() / 100d;
+                // Status JSON exposes the device's raw unsigned-byte fader value.
+                // The CLI accepts 0-100 percentages for writes, but reads remain 0-255.
+                var level = volume.Value.GetDouble() / 255d;
                 return new AgentGoXlrChannelState(id, DisplayChannel(volume.Name), Math.Clamp(level, 0, 1), muteStates.TryGetValue(id, out var muted) && muted);
             })
             .OrderBy(channel => channel.Name, StringComparer.OrdinalIgnoreCase)
