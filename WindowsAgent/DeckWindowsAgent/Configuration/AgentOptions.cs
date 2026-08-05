@@ -5,6 +5,7 @@ namespace DeckWindowsAgent.Configuration;
 public sealed class AgentOptions
 {
     public string BindAddress { get; init; } = IPAddress.Loopback.ToString();
+    public string[] BindAddresses { get; init; } = [];
     public int Port { get; init; } = 8732;
     public string CertificateThumbprint { get; init; } = string.Empty;
     public int PairingCodeLifetimeSeconds { get; init; } = 120;
@@ -12,9 +13,11 @@ public sealed class AgentOptions
 
     public void Validate()
     {
-        if (!IPAddress.TryParse(BindAddress, out var address) || !PrivateNetworkGuard.IsPrivateOrLoopback(address))
+        var addresses = EffectiveBindAddresses;
+        if (addresses.Count == 0 || addresses.Any(value =>
+            !IPAddress.TryParse(value, out var address) || !PrivateNetworkGuard.IsPrivateOrLoopback(address)))
         {
-            throw new InvalidOperationException("Agent:BindAddress must be one explicit loopback, LAN, or private-VPN IP address.");
+            throw new InvalidOperationException("Agent bind addresses must be explicit loopback, LAN, or private-VPN IP addresses.");
         }
 
         if (Port is < 1024 or > 65535)
@@ -32,6 +35,10 @@ public sealed class AgentOptions
             throw new InvalidOperationException("Pairing safety settings are outside their allowed ranges.");
         }
     }
+
+    public IReadOnlyList<string> EffectiveBindAddresses => BindAddresses.Length > 0
+        ? BindAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        : [BindAddress];
 }
 
 public static class PrivateNetworkGuard

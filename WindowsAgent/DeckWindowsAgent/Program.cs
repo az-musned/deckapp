@@ -13,7 +13,10 @@ var certificate = CertificateLoader.LoadCurrentUserCertificate(options.Certifica
 
 builder.WebHost.ConfigureKestrel(server =>
 {
-    server.Listen(IPAddress.Parse(options.BindAddress), options.Port, listen => listen.UseHttps(certificate));
+    foreach (var address in options.EffectiveBindAddresses)
+    {
+        server.Listen(IPAddress.Parse(address), options.Port, listen => listen.UseHttps(certificate));
+    }
     server.Limits.MaxRequestBodySize = 16 * 1024;
     server.Limits.MaxConcurrentUpgradedConnections = 1;
 });

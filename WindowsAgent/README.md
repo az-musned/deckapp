@@ -38,6 +38,12 @@ For one private address that works on home Wi-Fi and 5G, install and sign in to 
 
 The script selects the PC's active `100.64.0.0/10` Tailscale address, creates a TLS certificate for that exact IP, preserves existing Windows audio/GoXLR/application capability settings, and limits inbound firewall rules to the Tailscale interface and tailnet address range. It prints the Agent and optional Companion addresses to enter in DeckApp. Install and explicitly trust the exported public root certificate on each iPhone/iPad.
 
+For the lowest latency on a home mesh plus seamless fallback on cellular, configure both explicit interfaces:
+
+`powershell -ExecutionPolicy Bypass -File WindowsAgent\scripts\Configure-TailscaleConnection.ps1 -EnableLocalNetwork -LocalBindAddress 192.168.x.x -AllowCompanion`
+
+Use the PC's Ethernet IPv4 address for `LocalBindAddress`. The script creates one server certificate valid for both addresses and separate firewall rules scoped to the mesh interface/local subnet and the Tailscale interface/tailnet. In DeckApp, select **Automatic**, enter the printed local address first and the printed Tailscale address second. The app prefers LAN and falls back to VPN after a connection loss.
+
 Enable Tailscale VPN On Demand for Wi-Fi and cellular on iOS so the private route remains available after path changes. For latency checks, run `tailscale ping <iphone-or-ipad-name>` on the PC. A `direct` path is preferred; a `DERP` path is encrypted but can have higher latency. DeckApp never requires an exit node for this connection.
 
 Press `I` locally to enable/disable remote input, `E` for emergency disable, `P` to list paired devices, or `R` to revoke one. Keep the console visible during this development phase.

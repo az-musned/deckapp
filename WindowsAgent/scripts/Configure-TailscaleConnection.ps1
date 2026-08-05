@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$BindAddress = "",
+    [switch]$EnableLocalNetwork,
+    [string]$LocalBindAddress = "",
     [ValidateRange(1024, 65535)]
     [int]$AgentPort = 8732,
     [ValidateRange(1024, 65535)]
@@ -18,6 +20,18 @@ function Test-TailscaleIPv4Address {
     if (-not [System.Net.IPAddress]::TryParse($Address, [ref]$parsed)) { return $false }
     $bytes = $parsed.GetAddressBytes()
     return $bytes.Length -eq 4 -and $bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127
+}
+
+function Test-PrivateLANIPv4Address {
+    param([Parameter(Mandatory = $true)][string]$Address)
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($Address, [ref]$parsed)) { return $false }
+    $bytes = $parsed.GetAddressBytes()
+    return $bytes.Length -eq 4 -and (
+        $bytes[0] -eq 10 -or
+        ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+        ($bytes[0] -eq 192 -and $bytes[1] -eq 168)
+    )
 }
 
 function Assert-NonExportableRsaKey {
@@ -85,6 +99,30 @@ if ($bindRecords.Count -ne 1) {
 }
 $interfaceAlias = $bindRecords[0].InterfaceAlias
 
+$localInterfaceAlias = ""
+if ($EnableLocalNetwork) {
+    $localRecords = @(
+        Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
+            Where-Object { Test-PrivateLANIPv4Address -Address $_.IPAddress }
+    )
+    $localAddresses = @($localRecords | Select-Object -ExpandProperty IPAddress -Unique)
+    if ([string]::IsNullOrWhiteSpace($LocalBindAddress)) {
+        if ($localAddresses.Count -ne 1) {
+            $choices = if ($localAddresses.Count -eq 0) { "none" } else { $localAddresses -join ", " }
+            throw "Choose the PC's mesh Ethernet address with -LocalBindAddress. Private LAN addresses found: $choices"
+        }
+        $LocalBindAddress = $localAddresses[0]
+    }
+    if (-not (Test-PrivateLANIPv4Address -Address $LocalBindAddress)) {
+        throw "LocalBindAddress must be an RFC1918 LAN address."
+    }
+    $matchingLocalRecords = @($localRecords | Where-Object { $_.IPAddress -eq $LocalBindAddress })
+    if ($matchingLocalRecords.Count -ne 1) {
+        throw "LocalBindAddress $LocalBindAddress must identify exactly one active mesh/LAN interface on this PC."
+    }
+    $localInterfaceAlias = $matchingLocalRecords[0].InterfaceAlias
+}
+
 if (-not $SkipFirewall) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -121,6 +159,9 @@ if ($null -eq $rootCertificate) {
 }
 Assert-NonExportableRsaKey -Certificate $rootCertificate -Label "Tailscale root certificate"
 
+$subjectAlternativeName = "IPAddress=$BindAddress"
+if ($EnableLocalNetwork) { $subjectAlternativeName += "&IPAddress=$LocalBindAddress" }
+
 $serverCertificate = New-SelfSignedCertificate `
     -Type Custom `
     -Subject "CN=$BindAddress" `
@@ -133,7 +174,7 @@ $serverCertificate = New-SelfSignedCertificate `
     -CertStoreLocation "Cert:\CurrentUser\My" `
     -NotAfter (Get-Date).AddDays(365) `
     -TextExtension @(
-        "2.5.29.17={text}IPAddress=$BindAddress",
+        "2.5.29.17={text}$subjectAlternativeName",
         "2.5.29.37={text}1.3.6.1.5.5.7.3.1",
         "2.5.29.19={critical}{text}ca=0"
     )
@@ -144,6 +185,9 @@ $serverSan = ($serverCertificate.Extensions |
     Select-Object -First 1).Format($false)
 if ($serverSan -notmatch [regex]::Escape($BindAddress)) {
     throw "The generated server certificate SAN does not contain $BindAddress."
+}
+if ($EnableLocalNetwork -and $serverSan -notmatch [regex]::Escape($LocalBindAddress)) {
+    throw "The generated server certificate SAN does not contain $LocalBindAddress."
 }
 
 Export-Certificate -Cert $rootCertificate -FilePath $rootExportPath -Force | Out-Null
@@ -167,9 +211,13 @@ if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
     }
 }
 
+$agentBindAddresses = @($BindAddress)
+if ($EnableLocalNetwork) { $agentBindAddresses = @($LocalBindAddress, $BindAddress) }
+
 $settings = [ordered]@{
     Agent = [ordered]@{
         BindAddress = $BindAddress
+        BindAddresses = $agentBindAddresses
         Port = $AgentPort
         CertificateThumbprint = $serverCertificate.Thumbprint
         PairingCodeLifetimeSeconds = 120
@@ -201,6 +249,24 @@ if (-not $SkipFirewall) {
         -LocalPort $AgentPort `
         -InterfaceAlias $interfaceAlias
 
+    if ($EnableLocalNetwork) {
+        $localAgentRuleName = "Deck Windows Agent LAN $LocalBindAddress`:$AgentPort"
+        if ($null -eq (Get-NetFirewallRule -DisplayName $localAgentRuleName -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule `
+                -DisplayName $localAgentRuleName `
+                -Description "Deck Agent, limited to this PC's private mesh/LAN interface and local subnet." `
+                -Direction Inbound `
+                -Action Allow `
+                -Protocol TCP `
+                -LocalAddress $LocalBindAddress `
+                -LocalPort $AgentPort `
+                -RemoteAddress LocalSubnet `
+                -InterfaceAlias ([System.Management.Automation.WildcardPattern]::Escape($localInterfaceAlias)) `
+                -Profile Private `
+                -EdgeTraversalPolicy Block | Out-Null
+        }
+    }
+
     if ($AllowCompanion) {
         $companionRuleName = "Bitfocus Companion Tailscale $BindAddress`:$CompanionPort"
         if ($null -eq (Get-NetFirewallRule -DisplayName $companionRuleName -ErrorAction SilentlyContinue)) {
@@ -222,13 +288,33 @@ if (-not $SkipFirewall) {
             -LocalAddress $BindAddress `
             -LocalPort $CompanionPort `
             -InterfaceAlias $interfaceAlias
+
+        if ($EnableLocalNetwork) {
+            $localCompanionRuleName = "Bitfocus Companion LAN $LocalBindAddress`:$CompanionPort"
+            if ($null -eq (Get-NetFirewallRule -DisplayName $localCompanionRuleName -ErrorAction SilentlyContinue)) {
+                New-NetFirewallRule `
+                    -DisplayName $localCompanionRuleName `
+                    -Description "Companion HTTP API, limited to this PC's private mesh/LAN interface and local subnet." `
+                    -Direction Inbound `
+                    -Action Allow `
+                    -Protocol TCP `
+                    -LocalAddress $LocalBindAddress `
+                    -LocalPort $CompanionPort `
+                    -RemoteAddress LocalSubnet `
+                    -InterfaceAlias ([System.Management.Automation.WildcardPattern]::Escape($localInterfaceAlias)) `
+                    -Profile Private `
+                    -EdgeTraversalPolicy Block | Out-Null
+            }
+        }
     }
 }
 
 Write-Host ""
 Write-Host "Private Tailscale route configured successfully." -ForegroundColor Green
 Write-Host "DeckApp Agent address: https://$BindAddress`:$AgentPort"
+if ($EnableLocalNetwork) { Write-Host "DeckApp local Agent address: https://$LocalBindAddress`:$AgentPort" }
 if ($AllowCompanion) { Write-Host "DeckApp Companion address: http://$BindAddress`:$CompanionPort" }
+if ($EnableLocalNetwork -and $AllowCompanion) { Write-Host "DeckApp local Companion address: http://$LocalBindAddress`:$CompanionPort" }
 Write-Host "Windows interface: $interfaceAlias"
 Write-Host "Install this public root certificate on each iPhone/iPad: $rootExportPath"
 Write-Host "Then enable it under Settings > General > About > Certificate Trust Settings."
