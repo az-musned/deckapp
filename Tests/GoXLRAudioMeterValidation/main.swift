@@ -35,6 +35,30 @@ struct GoXLRAudioMeterValidation {
             preservingControlIDs: ["mic"]
         )
         precondition(channels[0].volume == 0.8 && !channels[0].isMuted, "An active local interaction must win over live control state.")
+
+        channels.append(GoXLRChannelState(
+            control: WindowsGoXLRChannelState(id: "LineIn", name: "Line In", level: 0.4, isMuted: false)
+        ))
+        let differentlyCasedMeter = AudioMetersMessage(
+            type: "audio.meters",
+            sequence: 1844,
+            timestamp: 1785912800125,
+            channels: [
+                AudioMeterChannelPayload(
+                    id: "linein",
+                    endpointId: nil,
+                    available: true,
+                    linearPeak: 0.3,
+                    decibels: -24,
+                    displayLevel: 0.44,
+                    peakHold: 0.5,
+                    clipping: false
+                )
+            ]
+        )
+        GoXLRChannelStateReducer.apply(differentlyCasedMeter, to: &channels, now: updateDate)
+        precondition(channels.count == 2, "Case differences between control and meter channel IDs must not create duplicates.")
+        precondition(channels[1].displayLevel == 0.44)
         GoXLRChannelStateReducer.decay(&channels, elapsed: 5)
         precondition(channels[0].displayLevel == 0 && channels[0].peakHold == 0)
 

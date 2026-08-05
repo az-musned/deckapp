@@ -182,15 +182,20 @@ nonisolated enum GoXLRChannelStateReducer {
         now: Date,
         preservingControlIDs: Set<String> = []
     ) {
-        var indices = Dictionary(uniqueKeysWithValues: channels.indices.map { (channels[$0].id, $0) })
+        var indices: [String: Int] = [:]
+        for index in channels.indices {
+            let key = channels[index].id.lowercased()
+            if indices[key] == nil { indices[key] = index }
+        }
         for rawPayload in message.channels {
             let payload = rawPayload.clamped
-            if indices[payload.id] == nil {
+            let payloadKey = payload.id.lowercased()
+            if indices[payloadKey] == nil {
                 let fallback = WindowsGoXLRChannelState(id: payload.id, name: payload.id, level: 0, isMuted: false)
                 channels.append(GoXLRChannelState(control: fallback))
-                indices[payload.id] = channels.index(before: channels.endIndex)
+                indices[payloadKey] = channels.index(before: channels.endIndex)
             }
-            guard let index = indices[payload.id] else { continue }
+            guard let index = indices[payloadKey] else { continue }
             channels[index].endpointID = payload.endpointId
             channels[index].isAvailable = payload.available
             channels[index].linearPeak = payload.linearPeak
@@ -199,7 +204,7 @@ nonisolated enum GoXLRChannelStateReducer {
             channels[index].peakHold = payload.peakHold
             channels[index].isClipping = payload.clipping
             channels[index].lastMeterUpdate = now
-            if !preservingControlIDs.contains(payload.id.lowercased()) {
+            if !preservingControlIDs.contains(payloadKey) {
                 if let level = payload.level { channels[index].volume = level }
                 if let isMuted = payload.isMuted { channels[index].isMuted = isMuted }
             }

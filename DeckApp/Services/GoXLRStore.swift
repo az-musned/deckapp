@@ -40,10 +40,16 @@ final class GoXLRStore {
 
     func syncControlChannels(_ controls: [WindowsGoXLRChannelState]) {
         let now = Date()
-        let old = Dictionary(uniqueKeysWithValues: channels.map { ($0.id.lowercased(), $0) })
+        var old: [String: GoXLRChannelState] = [:]
+        for channel in channels {
+            let key = channel.id.lowercased()
+            if old[key] == nil { old[key] = channel }
+        }
         var pending = pendingVolumeTargets
-        channels = controls.map { control in
+        var seenControlIDs: Set<String> = []
+        channels = controls.compactMap { control in
             let key = control.id.lowercased()
+            guard seenControlIDs.insert(key).inserted else { return nil }
             var merged = old[key] ?? GoXLRChannelState(control: control)
             merged.displayName = control.name
             if !activeVolumeInteractions.contains(key), let target = pending[key] {
@@ -55,7 +61,7 @@ final class GoXLRStore {
                 merged.volume = control.level.clampedMeterValue
             }
             merged.isMuted = control.isMuted
-            if let mapping = mappings.first(where: { $0.id == control.id }) {
+            if let mapping = mappings.first(where: { $0.id.caseInsensitiveCompare(control.id) == .orderedSame }) {
                 merged.endpointID = mapping.endpointId
                 merged.endpointName = mapping.endpointName
                 merged.isAvailable = mapping.endpointAvailable
@@ -65,11 +71,13 @@ final class GoXLRStore {
         pendingVolumeTargets = pending
     }
 
-    func channel(for id: String) -> GoXLRChannelState? { channels.first { $0.id == id } }
+    func channel(for id: String) -> GoXLRChannelState? {
+        channels.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
+    }
     var controlsAreAvailable: Bool { controller?.pairingState.isPaired == true }
 
     func updateVolumeDraft(channelId: String, value: Double) {
-        guard let index = channels.firstIndex(where: { $0.id == channelId }) else { return }
+        guard let index = channels.firstIndex(where: { $0.id.caseInsensitiveCompare(channelId) == .orderedSame }) else { return }
         channels[index].volume = value.clampedMeterValue
     }
 
