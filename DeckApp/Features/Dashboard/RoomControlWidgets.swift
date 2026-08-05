@@ -8,7 +8,11 @@ struct RoomControlWidgetView: View {
     var body: some View {
         switch definition.kind {
         case .light:
-            MockLightWidget(definition: definition)
+            if definition.backend.backend == .govee {
+                GoveeLightWidget(definition: definition)
+            } else {
+                MockLightWidget(definition: definition)
+            }
         case .climate:
             MockClimateWidget(definition: definition, compact: compact)
         case .television:
@@ -16,7 +20,7 @@ struct RoomControlWidgetView: View {
         case .pcPower:
             MockPCPowerWidget(definition: definition)
         case .audioMixer:
-            MockGoXLRWidget(definition: definition, compact: compact)
+            GoXLRWidget(definition: definition, compact: compact)
         case .companionActions:
             CompanionActionsWidget(definition: definition, compact: compact)
         case .remoteInputLauncher:
@@ -132,7 +136,7 @@ private struct WidgetHeader: View {
                     Circle()
                         .fill(availability == .available ? DesignToken.Color.positive : Color.secondary)
                         .frame(width: 8, height: 8)
-                    Text(definition.backend.backend == .homeAssistant ? "LIVE" : "MOCK")
+                    Text(backendBadge)
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -164,11 +168,216 @@ private struct WidgetHeader: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(availability == .available ? DesignToken.Color.positive : .secondary)
                         .lineLimit(1)
-                    Text(definition.backend.backend == .homeAssistant ? "LIVE" : "MOCK")
+                    Text(backendBadge)
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private var backendBadge: String {
+        switch definition.backend.backend {
+        case .homeAssistant: "LIVE"
+        case .govee: "GOVEE"
+        case .windowsAgent: "AGENT"
+        case .companion: "COMPANION"
+        case .mock: "MOCK"
+        }
+    }
+}
+
+private struct GoveeLightWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+
+    private let colorPresets: [(String, Int, Color)] = [
+        ("Red", 0xFF3B30, .red), ("Orange", 0xFF9500, .orange),
+        ("Yellow", 0xFFCC00, .yellow), ("Green", 0x34C759, .green),
+        ("Cyan", 0x32ADE6, .cyan), ("Blue", 0x007AFF, .blue),
+        ("Purple", 0xAF52DE, .purple), ("White", 0xFFFFFF, .white)
+    ]
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: availability)
+
+            if let device {
+                powerControl(device)
+                ForEach(visibleCapabilities) { capability in
+                    capabilityControl(device, capability)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Govee Device Unavailable",
+                    systemImage: "lightbulb.slash",
+                    description: Text("Reconnect Govee from Settings or choose another device.")
+                )
+                .frame(maxHeight: 150)
+            }
+        }
+        .task(id: definition.backend.identifier) {
+            await appState.refreshGoveeState(deviceID: definition.backend.identifier)
+        }
+    }
+
+    private var device: GoveeDevice? {
+        appState.goveeDevice(for: definition.backend.identifier)
+    }
+
+    private var availability: DeviceAvailability {
+        guard let device else { return .unavailable }
+        guard let online = device.capabilities.first(where: { $0.instance == "online" }) else { return .available }
+        if case .bool(let value) = appState.goveeValue(deviceID: device.id, capabilityID: online.id) {
+            return value ? .available : .unavailable
+        }
+        return .available
+    }
+
+    private var visibleCapabilities: [GoveeCapability] {
+        guard let device else { return [] }
+        let controls = device.actionableCapabilities.filter { $0.instance != "powerSwitch" }
+        return switch definition.size.presentationDensity {
+        case .compact: []
+        case .standard: Array(controls.prefix(2))
+        case .expanded: controls
+        }
+    }
+
+    @ViewBuilder
+    private func powerControl(_ device: GoveeDevice) -> some View {
+        if let capability = device.actionableCapabilities.first(where: { $0.instance == "powerSwitch" }) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isPowerOn(device, capability) ? "On" : "Off")
+                        .font(.title3.bold())
+                    Text("Power")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    let value = powerValue(capability, turnOn: !isPowerOn(device, capability))
+                    Task { await appState.setGoveeCapability(deviceID: device.id, capabilityID: capability.id, value: value) }
+                } label: {
+                    Image(systemName: "power")
+                        .frame(width: 42, height: 42)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(
+                    .interactive,
+                    cornerRadius: 999,
+                    tint: (isPowerOn(device, capability) ? DesignToken.Color.positive : DesignToken.Color.accent).opacity(0.2),
+                    interactive: true
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityControl(_ device: GoveeDevice, _ capability: GoveeCapability) -> some View {
+        if capability.instance == "colorRgb" {
+            VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+                Text("Color").font(.caption)
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(colorPresets, id: \.0) { preset in
+                        Button {
+                            Task {
+                                await appState.setGoveeCapability(
+                                    deviceID: device.id,
+                                    capabilityID: capability.id,
+                                    value: .number(Double(preset.1))
+                                )
+                            }
+                        } label: {
+                            Circle()
+                                .fill(preset.2)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.0)
+                    }
+                }
+            }
+        } else if let options = capability.parameters?.options, !options.isEmpty {
+            HStack {
+                Text(capability.title).font(.caption)
+                Spacer()
+                Menu {
+                    ForEach(options) { option in
+                        Button(option.name) {
+                            Task {
+                                await appState.setGoveeCapability(
+                                    deviceID: device.id,
+                                    capabilityID: capability.id,
+                                    value: option.value
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    Text(optionName(device, capability, options: options))
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .padding(DesignToken.Spacing.small)
+            .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.08))
+        } else if let range = capability.parameters?.range {
+            NumericControlRow(
+                title: capability.title,
+                value: numericBinding(device, capability, fallback: range.min),
+                range: range.min...range.max,
+                step: max(range.precision ?? 1, 1),
+                valueLabel: numericValue(device, capability, fallback: range.min).formatted(.number.precision(.fractionLength(0))) + unitLabel(capability)
+            ) {
+                let value = numericValue(device, capability, fallback: range.min)
+                Task {
+                    await appState.setGoveeCapability(deviceID: device.id, capabilityID: capability.id, value: .number(value))
+                }
+            }
+        }
+    }
+
+    private func numericBinding(_ device: GoveeDevice, _ capability: GoveeCapability, fallback: Double) -> Binding<Double> {
+        Binding(
+            get: { numericValue(device, capability, fallback: fallback) },
+            set: { appState.goveeControlValues[device.id, default: [:]][capability.id] = .number($0) }
+        )
+    }
+
+    private func numericValue(_ device: GoveeDevice, _ capability: GoveeCapability, fallback: Double) -> Double {
+        guard case .number(let value) = appState.goveeValue(deviceID: device.id, capabilityID: capability.id) else { return fallback }
+        return value
+    }
+
+    private func isPowerOn(_ device: GoveeDevice, _ capability: GoveeCapability) -> Bool {
+        switch appState.goveeValue(deviceID: device.id, capabilityID: capability.id) {
+        case .number(let value): value != 0
+        case .bool(let value): value
+        case .string(let value): value.caseInsensitiveCompare("on") == .orderedSame
+        default: false
+        }
+    }
+
+    private func powerValue(_ capability: GoveeCapability, turnOn: Bool) -> GoveeValue {
+        let desiredName = turnOn ? "on" : "off"
+        return capability.parameters?.options?.first {
+            $0.name.caseInsensitiveCompare(desiredName) == .orderedSame
+        }?.value ?? .number(turnOn ? 1 : 0)
+    }
+
+    private func optionName(_ device: GoveeDevice, _ capability: GoveeCapability, options: [GoveeCapabilityOption]) -> String {
+        guard let value = appState.goveeValue(deviceID: device.id, capabilityID: capability.id) else { return "Choose" }
+        return options.first(where: { $0.value == value })?.name ?? value.displayValue
+    }
+
+    private func unitLabel(_ capability: GoveeCapability) -> String {
+        switch capability.parameters?.unit {
+        case "unit.percent": "%"
+        case "unit.colorTemperature": "K"
+        case .some(let unit): unit.replacingOccurrences(of: "unit.", with: " ")
+        case nil: ""
         }
     }
 }
@@ -564,6 +773,192 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct GoXLRWidget: View {
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        if definition.backend.backend == .windowsAgent {
+            LiveGoXLRWidget(definition: definition, compact: compact)
+        } else {
+            MockGoXLRWidget(definition: definition, compact: compact)
+        }
+    }
+}
+
+private struct LiveGoXLRWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+    @State private var showingMixer = false
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(
+                definition: definition,
+                availability: snapshot?.goXLRConnected == true ? .available : .unavailable
+            )
+
+            if snapshot?.goXLRConnected == true {
+                if definition.size.presentationDensity == .expanded {
+                    Label(
+                        meterStore.meterStreamIsStale ? "Live meters stale" : meterStore.meterConnectionState.title,
+                        systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
+                }
+                if definition.size.presentationDensity == .compact {
+                    compactMeters
+                } else {
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: DesignToken.Spacing.small) {
+                            ForEach(visibleChannels) { channel in
+                                LiveGoXLRChannelRow(
+                                    store: meterStore,
+                                    channel: channel,
+                                    tint: Color.controlDeckTint(named: definition.tintName),
+                                    showsDecibels: definition.size.presentationDensity == .expanded
+                                )
+                                .frame(width: compact ? 155 : 190)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+            } else {
+                Label(
+                    appState.remoteInput.pairingState.isPaired
+                        ? "GoXLR Utility is unavailable on the PC"
+                        : "Pair the Windows Agent to load GoXLR",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if definition.size.presentationDensity == .compact { showingMixer = true } }
+        .sheet(isPresented: $showingMixer) { GoXLRMixerView(store: meterStore) }
+        .task {
+            await appState.remoteInput.refreshAgentSecurityState()
+            await meterStore.startMetering()
+            do { try await Task.sleep(for: .seconds(86_400)) } catch { }
+            await meterStore.stopMetering()
+        }
+    }
+
+    private var snapshot: WindowsAgentCapabilitySnapshot? {
+        appState.remoteInput.capabilitySnapshot
+    }
+
+    private var meterStore: GoXLRStore { appState.remoteInput.goXLR }
+
+    private var visibleChannels: [GoXLRChannelState] {
+        let limit = switch definition.size.presentationDensity {
+        case .compact: min(4, meterStore.channels.count)
+        case .standard: min(6, meterStore.channels.count)
+        case .expanded: meterStore.channels.count
+        }
+        return Array(meterStore.channels.prefix(limit))
+    }
+
+    private var compactMeters: some View {
+        HStack(alignment: .bottom, spacing: DesignToken.Spacing.small) {
+            ForEach(visibleChannels) { channel in
+                VStack(spacing: 3) {
+                    AudioLevelMeterView(
+                        level: channel.displayLevel,
+                        peakHold: channel.peakHold,
+                        isClipping: channel.isClipping,
+                        isAvailable: channel.isAvailable,
+                        isStale: meterStore.meterStreamIsStale,
+                        decibels: channel.decibels,
+                        channelName: channel.displayName
+                    )
+                    .frame(width: 18, height: 52)
+                    Text(String(channel.displayName.prefix(4)))
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct LiveGoXLRChannelRow: View {
+    let store: GoXLRStore
+    let channel: GoXLRChannelState
+    let tint: Color
+    let showsDecibels: Bool
+    @State private var draftLevel: Double
+
+    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color, showsDecibels: Bool) {
+        self.store = store
+        self.channel = channel
+        self.tint = tint
+        self.showsDecibels = showsDecibels
+        _draftLevel = State(initialValue: channel.volume)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+            HStack(alignment: .center) {
+                AudioLevelMeterView(
+                    level: channel.displayLevel,
+                    peakHold: channel.peakHold,
+                    isClipping: channel.isClipping,
+                    isAvailable: channel.isAvailable,
+                    isStale: store.meterStreamIsStale,
+                    decibels: channel.decibels,
+                    channelName: channel.displayName
+                )
+                .frame(width: 16, height: 54)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(channel.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(draftLevel, format: .percent.precision(.fractionLength(0)))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    if showsDecibels {
+                        Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button {
+                    Task { await store.toggleMute(channelId: channel.id) }
+                } label: {
+                    Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
+                }
+                .buttonStyle(.plain)
+                .disabled(!store.controlsAreAvailable)
+            }
+            Slider(value: $draftLevel, in: 0...1) { editing in
+                if !editing {
+                    store.updateVolumeDraft(channelId: channel.id, value: draftLevel)
+                    Task { await store.setVolume(channelId: channel.id, value: draftLevel) }
+                }
+            }
+            .tint(tint)
+            .disabled(!store.controlsAreAvailable)
+        }
+        .padding(DesignToken.Spacing.small)
+        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.08))
+        .onChange(of: channel.volume) { _, level in
+            draftLevel = level
+        }
     }
 }
 

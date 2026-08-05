@@ -117,8 +117,64 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Govee") {
+                    SecureField("Govee API key", text: Binding(
+                        get: { appState.goveeAPIKey },
+                        set: { appState.goveeAPIKey = $0 }
+                    ))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    LabeledContent("Status") {
+                        HStack(spacing: DesignToken.Spacing.xSmall) {
+                            if appState.goveeStatus == .discovering {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(appState.goveeStatus.title)
+                                .foregroundStyle(goveeStatusColor)
+                        }
+                    }
+
+                    if case .failed(let message) = appState.goveeStatus {
+                        LabeledContent("Reason") {
+                            Text(message)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(DesignToken.Color.destructive)
+                        }
+                        .font(.caption)
+                    }
+
+                    Button {
+                        Task { await appState.saveAndDiscoverGovee() }
+                    } label: {
+                        Label("Save and Discover Devices", systemImage: "lightbulb.led.fill")
+                    }
+                    .disabled(appState.goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.goveeStatus == .discovering)
+
+                    if !appState.goveeDevices.isEmpty {
+                        ForEach(appState.goveeDevices) { device in
+                            LabeledContent {
+                                Text("\(device.actionableCapabilities.count) controls")
+                                    .foregroundStyle(.secondary)
+                            } label: {
+                                Label(device.deviceName, systemImage: "lightbulb.led")
+                            }
+                        }
+                    }
+
+                    if !appState.goveeAPIKey.isEmpty {
+                        Button("Remove Govee API Key", role: .destructive) {
+                            appState.forgetGoveeAPIKey()
+                        }
+                    }
+
+                    Text("The key is stored only in Keychain and sent only to Govee's official HTTPS API. It is never written to dashboard data or logs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section {
-                    TextField("PC address, for example 192.168.1.50:8000", text: companionAddressBinding)
+                    TextField("PC address, for example 100.x.y.z:8000", text: companionAddressBinding)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
@@ -158,13 +214,13 @@ struct SettingsView: View {
                             || appState.companionStatus == .testing
                     )
 
-                    Text("Companion is allowed only over your home LAN or a private VPN such as Tailscale. DeckApp rejects public Companion addresses.")
+                    Text("Companion is allowed only over your home LAN or a private VPN. Use the PC's Tailscale IP for the same macro address on home Wi-Fi and 5G. DeckApp rejects public addresses.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Bitfocus Companion")
                 } footer: {
-                    Text("Enable Companion’s HTTP remote-control API on the PC and use the same IP address and port as its web interface. Never forward this port on your router.")
+                    Text("Enable Companion’s HTTP API and permit port 8000 only on the Tailscale interface. Never forward this port on your router.")
                 }
 
                 Section {
@@ -264,7 +320,6 @@ struct SettingsView: View {
                 }
 
                 Section("Integrations") {
-                    SettingsPlaceholderRow(title: "Govee", detail: "Through Home Assistant", symbol: "lightbulb.led")
                     SettingsPlaceholderRow(title: "Gree", detail: "Through Home Assistant", symbol: "snowflake")
                     SettingsPlaceholderRow(title: "Smart Life", detail: "Through Home Assistant", symbol: "house")
                     SettingsPlaceholderRow(title: "TV control", detail: "Through Home Assistant", symbol: "tv")
@@ -382,6 +437,15 @@ struct SettingsView: View {
         switch appState.companionStatus {
         case .connected: DesignToken.Color.positive
         case .testing: DesignToken.Color.warning
+        case .failed: DesignToken.Color.destructive
+        case .notConfigured: .secondary
+        }
+    }
+
+    private var goveeStatusColor: Color {
+        switch appState.goveeStatus {
+        case .connected: DesignToken.Color.positive
+        case .discovering: DesignToken.Color.warning
         case .failed: DesignToken.Color.destructive
         case .notConfigured: .secondary
         }

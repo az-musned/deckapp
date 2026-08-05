@@ -6,6 +6,22 @@ enum RemoteConnectionRoute: String, Codable, Sendable {
     case remote = "Remote"
 }
 
+enum WindowsAgentConnectionMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case local
+    case vpn
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .local: "Local"
+        case .vpn: "VPN"
+        }
+    }
+}
+
 enum RemoteConnectionState: Codable, Sendable, Equatable {
     case disconnected
     case connecting

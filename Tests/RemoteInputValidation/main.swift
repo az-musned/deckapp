@@ -38,6 +38,7 @@ struct RemoteInputValidation {
         precondition(inputEndpoint.absoluteString == "wss://192.168.137.1:8732/api/v1/agent/input")
         precondition(vpnEndpoint.route == .vpn)
         precondition(remoteEndpoint.route == .remote)
+        precondition(WindowsAgentConnectionMode.allCases == [.automatic, .local, .vpn])
         do {
             _ = try WindowsAgentEndpoint("http://192.168.137.1:8732")
             preconditionFailure("Insecure Windows Agent endpoint was accepted")

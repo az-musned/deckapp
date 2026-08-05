@@ -18,20 +18,29 @@ final class RemoteInputController {
     var pairingMessage = ""
     var capabilitySnapshot: WindowsAgentCapabilitySnapshot?
     var agentCommandExecution: WindowsAgentCommandExecution?
+    let goXLR = GoXLRStore()
     var usesMockAgent = true
-    var windowsAgentAddress = "https://127.0.0.1:8732"
+    var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
+    var windowsAgentLocalAddress = ""
+    var windowsAgentVPNAddress = ""
 
     var windowsAgentAddressIsValid: Bool {
-        usesMockAgent || (try? WindowsAgentEndpoint(windowsAgentAddress)) != nil
+        usesMockAgent || !configuredAgentAddresses.isEmpty
     }
 
     var windowsAgentAddressStatus: String {
         guard !usesMockAgent else { return "Deterministic in-app development service" }
-        do {
-            let endpoint = try WindowsAgentEndpoint(windowsAgentAddress)
-            return "\(endpoint.route.rawValue) · HTTPS/WSS · \(endpoint.displayAddress)"
-        } catch {
-            return error.localizedDescription
+        switch windowsAgentConnectionMode {
+        case .automatic:
+            if configuredAgentAddresses.count == 2 { return "Local preferred · VPN fallback · HTTPS/WSS" }
+            if let address = configuredAgentAddresses.first, let endpoint = try? WindowsAgentEndpoint(address) {
+                return "Automatic · \(endpoint.route.rawValue) only · HTTPS/WSS"
+            }
+            return "Enter at least one valid Agent address."
+        case .local:
+            return endpointStatus(windowsAgentLocalAddress, expectedRoute: .local)
+        case .vpn:
+            return endpointStatus(windowsAgentVPNAddress, expectedRoute: .vpn)
         }
     }
 
@@ -40,6 +49,9 @@ final class RemoteInputController {
     private let preferencesKey = "windowsRemote.inputPreferences.v1"
     private let mockModeKey = "windowsAgent.usesMock"
     private let addressKey = "windowsAgent.address"
+    private let localAddressKey = "windowsAgent.localAddress"
+    private let vpnAddressKey = "windowsAgent.vpnAddress"
+    private let connectionModeKey = "windowsAgent.connectionMode"
     private var pointerBuffer = PointerEventBuffer()
     private var flushTask: Task<Void, Never>?
     private var connectionMonitorTask: Task<Void, Never>?
@@ -54,27 +66,45 @@ final class RemoteInputController {
     ) {
         self.defaults = defaults
         usesMockAgent = defaults.object(forKey: mockModeKey) as? Bool ?? true
-        windowsAgentAddress = defaults.string(forKey: addressKey) ?? "https://127.0.0.1:8732"
+        windowsAgentLocalAddress = defaults.string(forKey: localAddressKey) ?? ""
+        windowsAgentVPNAddress = defaults.string(forKey: vpnAddressKey)
+            ?? defaults.string(forKey: addressKey)
+            ?? ""
+        if let rawMode = defaults.string(forKey: connectionModeKey),
+           let savedMode = WindowsAgentConnectionMode(rawValue: rawMode) {
+            windowsAgentConnectionMode = savedMode
+        }
         self.service = service ?? (usesMockAgent
             ? MockWindowsRemoteInputService()
-            : WindowsAgentClient(address: windowsAgentAddress, defaults: defaults))
+            : Self.makeAgentService(
+                addresses: Self.configuredAddresses(
+                    mode: windowsAgentConnectionMode,
+                    localAddress: windowsAgentLocalAddress,
+                    vpnAddress: windowsAgentVPNAddress
+                ),
+                defaults: defaults
+            ))
         if let data = defaults.data(forKey: preferencesKey),
            let saved = try? JSONDecoder().decode(RemoteInputPreferences.self, from: data) {
             preferences = saved
         }
+        goXLR.attach(controller: self)
     }
 
     func savePreferences() {
         guard let data = try? JSONEncoder().encode(preferences) else { return }
         defaults.set(data, forKey: preferencesKey)
         defaults.set(usesMockAgent, forKey: mockModeKey)
-        defaults.set(windowsAgentAddress.trimmingCharacters(in: .whitespacesAndNewlines), forKey: addressKey)
+        defaults.set(windowsAgentConnectionMode.rawValue, forKey: connectionModeKey)
+        defaults.set(windowsAgentLocalAddress.trimmingCharacters(in: .whitespacesAndNewlines), forKey: localAddressKey)
+        defaults.set(windowsAgentVPNAddress.trimmingCharacters(in: .whitespacesAndNewlines), forKey: vpnAddressKey)
     }
 
     func applyAgentConfiguration() async {
         await disconnect()
-        windowsAgentAddress = windowsAgentAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !usesMockAgent, (try? WindowsAgentEndpoint(windowsAgentAddress)) == nil {
+        windowsAgentLocalAddress = windowsAgentLocalAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        windowsAgentVPNAddress = windowsAgentVPNAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !usesMockAgent, configuredAgentAddresses.isEmpty {
             pairingState = .unpaired
             securityState = WindowsAgentSecurityState(remoteInputAllowed: false, inputInjectionAvailable: false, emergencyInputDisabled: false)
             capabilitySnapshot = nil
@@ -85,7 +115,7 @@ final class RemoteInputController {
         }
         service = usesMockAgent
             ? MockWindowsRemoteInputService()
-            : WindowsAgentClient(address: windowsAgentAddress, defaults: defaults)
+            : Self.makeAgentService(addresses: configuredAgentAddresses, defaults: defaults)
         pairingState = .unknown
         securityState = WindowsAgentSecurityState(remoteInputAllowed: false, inputInjectionAvailable: false, emergencyInputDisabled: false)
         capabilitySnapshot = nil
@@ -95,6 +125,45 @@ final class RemoteInputController {
             : "Using the authenticated Windows Agent transport."
         savePreferences()
         await refreshAgentSecurityState()
+        await goXLR.agentConfigurationChanged()
+    }
+
+    private var configuredAgentAddresses: [String] {
+        Self.configuredAddresses(
+            mode: windowsAgentConnectionMode,
+            localAddress: windowsAgentLocalAddress,
+            vpnAddress: windowsAgentVPNAddress
+        )
+    }
+
+    private func endpointStatus(_ address: String, expectedRoute: RemoteConnectionRoute?) -> String {
+        guard let endpoint = try? WindowsAgentEndpoint(address), expectedRoute == nil || endpoint.route == expectedRoute else {
+            return expectedRoute == .local ? "Enter a valid private LAN HTTPS address." : "Enter a valid Tailscale HTTPS address."
+        }
+        return "\(endpoint.route.rawValue) · HTTPS/WSS · \(endpoint.displayAddress)"
+    }
+
+    private static func configuredAddresses(
+        mode: WindowsAgentConnectionMode,
+        localAddress: String,
+        vpnAddress: String
+    ) -> [String] {
+        let local = localAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vpn = vpnAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validLocal = (try? WindowsAgentEndpoint(local)).flatMap { $0.route == .local ? local : nil }
+        let validVPN = (try? WindowsAgentEndpoint(vpn)).flatMap { $0.route == .vpn ? vpn : nil }
+        switch mode {
+        case .automatic: return [validLocal, validVPN].compactMap { $0 }
+        case .local: return [validLocal].compactMap { $0 }
+        case .vpn: return [validVPN].compactMap { $0 }
+        }
+    }
+
+    private static func makeAgentService(addresses: [String], defaults: UserDefaults) -> any WindowsRemoteInputServing {
+        if addresses.count == 1, let address = addresses.first {
+            return WindowsAgentClient(address: address, defaults: defaults)
+        }
+        return FailoverWindowsAgentService(addresses: addresses, defaults: defaults)
     }
 
     func refreshAgentSecurityState() async {
@@ -107,6 +176,7 @@ final class RemoteInputController {
             && snapshot.audioSessions.isEmpty
             && snapshot.goXLRChannels.isEmpty
             && !snapshot.goXLRConnected ? nil : snapshot
+        goXLR.syncControlChannels(snapshot.goXLRChannels)
     }
 
     func beginPairing() async {
@@ -142,6 +212,7 @@ final class RemoteInputController {
 
     func revokePairing() async {
         await disconnect()
+        await goXLR.agentDidDisconnect()
         await service.revokePairing()
         try? pairingKeychain.delete(account: pairingCredentialAccount)
         pairingState = .revoked
@@ -413,6 +484,7 @@ final class RemoteInputController {
         do {
             let result = try await service.perform(command)
             capabilitySnapshot = result.snapshot
+            goXLR.syncControlChannels(result.snapshot.goXLRChannels)
             execution.status = result.confirmed ? .confirmed : .failed
             execution.message = result.message
         } catch WindowsRemoteInputError.unpairedClient {
@@ -552,5 +624,13 @@ final class RemoteInputController {
 
     private var pairingCredentialAccount: String {
         usesMockAgent ? "pairing-credential.mock" : "pairing-credential.live"
+    }
+
+    var goXLRAudioConfiguration: GoXLRAudioConfiguration? {
+        guard !usesMockAgent,
+              !configuredAgentAddresses.isEmpty,
+              let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
+              !credential.isEmpty else { return nil }
+        return GoXLRAudioConfiguration(addresses: configuredAgentAddresses, credential: credential)
     }
 }

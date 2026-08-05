@@ -26,8 +26,10 @@ struct RootView: View {
             await appState.refresh()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase != .active else { return }
-            Task { await appState.remoteInput.pauseForUnsafeState() }
+            Task {
+                await appState.remoteInput.goXLR.setAppActive(phase == .active)
+                if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
+            }
         }
     }
 

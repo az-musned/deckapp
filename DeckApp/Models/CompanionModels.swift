@@ -41,7 +41,7 @@ enum CompanionButtonTestStatus: Sendable, Equatable {
     }
 }
 
-struct CompanionButtonMapping: Sendable, Equatable, Codable {
+struct CompanionButtonMapping: Sendable, Equatable, Hashable, Codable {
     var page: Int = 1
     var row: Int = 0
     var column: Int = 0

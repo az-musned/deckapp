@@ -102,7 +102,12 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
     )
     private var lastDisconnectReason: String?
 
-    init(address: String, session: URLSession? = nil, defaults: UserDefaults = .standard) {
+    init(
+        address: String,
+        session: URLSession? = nil,
+        defaults: UserDefaults = .standard,
+        requestTimeout: TimeInterval = 8
+    ) {
         self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if let session {
             requestSession = session
@@ -110,8 +115,8 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         } else {
             let requestConfiguration = URLSessionConfiguration.default
             requestConfiguration.waitsForConnectivity = true
-            requestConfiguration.timeoutIntervalForRequest = 8
-            requestConfiguration.timeoutIntervalForResource = 20
+            requestConfiguration.timeoutIntervalForRequest = requestTimeout
+            requestConfiguration.timeoutIntervalForResource = max(requestTimeout * 2, requestTimeout)
             requestSession = URLSession(configuration: requestConfiguration)
 
             let webSocketConfiguration = URLSessionConfiguration.default

@@ -45,6 +45,13 @@ Require(safety.RemoteInputAllowed && safety.EmergencyInputDisabled, "Emergency d
 Require(PrivateNetworkGuard.IsPrivateOrLoopback(System.Net.IPAddress.Parse("192.168.1.50")), "LAN address rejected.");
 Require(PrivateNetworkGuard.IsPrivateOrLoopback(System.Net.IPAddress.Parse("100.90.1.2")), "Private VPN address rejected.");
 Require(!PrivateNetworkGuard.IsPrivateOrLoopback(System.Net.IPAddress.Parse("8.8.8.8")), "Public address accepted.");
+var dualRouteOptions = new AgentOptions
+{
+    BindAddresses = ["192.168.1.50", "100.90.1.2"],
+    CertificateThumbprint = "validation-only"
+};
+dualRouteOptions.Validate();
+Require(dualRouteOptions.EffectiveBindAddresses.Count == 2, "Dual LAN/VPN listeners were not retained.");
 
 var inputSink = new RecordingInputSink();
 var processor = new InputBatchProcessor(inputSink);
