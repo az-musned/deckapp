@@ -117,7 +117,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             requestConfiguration.waitsForConnectivity = true
             requestConfiguration.timeoutIntervalForRequest = requestTimeout
             requestConfiguration.timeoutIntervalForResource = max(requestTimeout * 2, requestTimeout)
-            requestSession = URLSession(configuration: requestConfiguration)
+            requestSession = WindowsAgentURLSessionFactory.make(configuration: requestConfiguration)
 
             let webSocketConfiguration = URLSessionConfiguration.default
             webSocketConfiguration.waitsForConnectivity = true
@@ -125,7 +125,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             // A WebSocket is an ongoing resource. Keep the long default-scale
             // lifetime and use ping/pong to detect an unhealthy peer instead.
             webSocketConfiguration.timeoutIntervalForResource = 7 * 24 * 60 * 60
-            webSocketSession = URLSession(configuration: webSocketConfiguration)
+            webSocketSession = WindowsAgentURLSessionFactory.make(configuration: webSocketConfiguration)
         }
         let key = "windowsAgent.clientDeviceID"
         if let saved = defaults.string(forKey: key), !saved.isEmpty {

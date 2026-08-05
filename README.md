@@ -26,6 +26,7 @@ Open `DeckApp.xcodeproj` in Xcode 26 or newer, select the `DeckApp` scheme, and 
 - Phase 7 Windows-only .NET 10 Agent with HTTPS-only startup, private-network enforcement, cryptographic pairing, credential revocation, local safety controls, authenticated WebSocket input, and guarded `SendInput` injection
 - Optional live iOS Windows Agent transport with REST pairing, separate Keychain credential, authenticated `wss://` input batches, acknowledgements, latency measurement, and automatic safety-state monitoring
 - Strict Windows Agent endpoint diagnostics that reject HTTP, loopback, embedded credentials, query data, and fragments while identifying Local, VPN, and Remote routes
+- Agent-only TLS sessions anchored to the bundled public `DeckAgent-Local-Root.cer`, with normal hostname/IP SAN and certificate-validity checks preserved
 - Local, Remote, and Offline connection presentation
 - Settings placeholders for Home Assistant and private-VPN PC control
 - Validated LAN/private-VPN Bitfocus Companion connection testing

@@ -11,5 +11,6 @@ xcuserdata/
 *.pem
 *.key
 *.cer
+!DeckApp/Supporting/DeckAgent-Local-Root.cer
 WindowsAgent/**/appsettings.Development.json
 WindowsAgent/**/appsettings.Local.json
