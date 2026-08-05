@@ -18,7 +18,15 @@ final class GoXLRStore {
     @ObservationIgnored private var consumers = 0
     @ObservationIgnored private var appIsActive = true
     @ObservationIgnored private var staleTask: Task<Void, Never>?
+    @ObservationIgnored private var controlRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var lastMessageDate: Date?
+    @ObservationIgnored private var activeVolumeInteractions: Set<String> = []
+    @ObservationIgnored private var pendingVolumeTargets: [String: PendingVolumeTarget] = [:]
+
+    private struct PendingVolumeTarget {
+        let value: Double
+        let expiresAt: Date
+    }
 
     init(
         meterService: any GoXLRAudioMeterServing = GoXLRAudioMeterClient(),
@@ -31,11 +39,21 @@ final class GoXLRStore {
     func attach(controller: RemoteInputController) { self.controller = controller }
 
     func syncControlChannels(_ controls: [WindowsGoXLRChannelState]) {
-        let old = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
+        let now = Date()
+        let old = Dictionary(uniqueKeysWithValues: channels.map { ($0.id.lowercased(), $0) })
+        var pending = pendingVolumeTargets
         channels = controls.map { control in
-            var merged = old[control.id] ?? GoXLRChannelState(control: control)
+            let key = control.id.lowercased()
+            var merged = old[key] ?? GoXLRChannelState(control: control)
             merged.displayName = control.name
-            merged.volume = control.level.clampedMeterValue
+            if !activeVolumeInteractions.contains(key), let target = pending[key] {
+                if abs(control.level.clampedMeterValue - target.value) <= 0.015 || target.expiresAt <= now {
+                    merged.volume = control.level.clampedMeterValue
+                    pending.removeValue(forKey: key)
+                }
+            } else if !activeVolumeInteractions.contains(key) {
+                merged.volume = control.level.clampedMeterValue
+            }
             merged.isMuted = control.isMuted
             if let mapping = mappings.first(where: { $0.id == control.id }) {
                 merged.endpointID = mapping.endpointId
@@ -44,6 +62,7 @@ final class GoXLRStore {
             }
             return merged
         }
+        pendingVolumeTargets = pending
     }
 
     func channel(for id: String) -> GoXLRChannelState? { channels.first { $0.id == id } }
@@ -52,6 +71,24 @@ final class GoXLRStore {
     func updateVolumeDraft(channelId: String, value: Double) {
         guard let index = channels.firstIndex(where: { $0.id == channelId }) else { return }
         channels[index].volume = value.clampedMeterValue
+    }
+
+    func beginVolumeInteraction(channelId: String) {
+        let key = channelId.lowercased()
+        activeVolumeInteractions.insert(key)
+        pendingVolumeTargets.removeValue(forKey: key)
+    }
+
+    func commitVolumeInteraction(channelId: String, value: Double) async {
+        let normalized = value.clampedMeterValue
+        updateVolumeDraft(channelId: channelId, value: normalized)
+        let key = channelId.lowercased()
+        activeVolumeInteractions.remove(key)
+        pendingVolumeTargets[key] = PendingVolumeTarget(
+            value: normalized,
+            expiresAt: .now.addingTimeInterval(2)
+        )
+        await setVolume(channelId: channelId, value: normalized)
     }
 
     func setVolume(channelId: String, value: Double) async {
@@ -70,6 +107,7 @@ final class GoXLRStore {
     func startMetering() async {
         consumers += 1
         guard consumers == 1, appIsActive else { return }
+        await controller?.refreshGoXLRControlState()
         await connectMetering()
     }
 
@@ -155,6 +193,7 @@ final class GoXLRStore {
             return
         }
         staleTask?.cancel()
+        startControlRefresh()
         lastMessageDate = nil
         meterStreamIsStale = true
         await meterService.start(
@@ -179,10 +218,25 @@ final class GoXLRStore {
     private func stopTransport() async {
         staleTask?.cancel()
         staleTask = nil
+        controlRefreshTask?.cancel()
+        controlRefreshTask = nil
+        activeVolumeInteractions.removeAll()
+        pendingVolumeTargets.removeAll()
         await meterService.stop()
         meterConnectionState = .disconnected
         meterStreamIsStale = true
         resetMeters()
+    }
+
+    private func startControlRefresh() {
+        controlRefreshTask?.cancel()
+        controlRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, let self else { return }
+                await self.controller?.refreshGoXLRControlState()
+            }
+        }
     }
 
     func apply(_ message: AudioMetersMessage) {
@@ -190,7 +244,15 @@ final class GoXLRStore {
         let now = Date()
         lastMessageDate = now
         meterStreamIsStale = false
-        GoXLRChannelStateReducer.apply(message, to: &channels, now: now)
+        let protectedIDs = activeVolumeInteractions.union(
+            pendingVolumeTargets.compactMap { key, target in target.expiresAt > now ? key : nil }
+        )
+        GoXLRChannelStateReducer.apply(
+            message,
+            to: &channels,
+            now: now,
+            preservingControlIDs: protectedIDs
+        )
     }
 
     func updateStaleness(now: Date) {

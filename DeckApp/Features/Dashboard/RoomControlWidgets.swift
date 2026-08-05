@@ -908,6 +908,7 @@ private struct LiveGoXLRVerticalFader: View {
     let channel: GoXLRChannelState
     let tint: Color
     @State private var draftLevel: Double
+    @State private var isInteracting = false
 
     init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color) {
         self.store = store
@@ -935,10 +936,23 @@ private struct LiveGoXLRVerticalFader: View {
                 )
                 .frame(width: 10, height: 92)
 
-                GoXLRVerticalSlider(value: $draftLevel, tint: tint) {
-                    store.updateVolumeDraft(channelId: channel.id, value: draftLevel)
-                    Task { await store.setVolume(channelId: channel.id, value: draftLevel) }
-                }
+                GoXLRVerticalSlider(
+                    value: Binding(
+                        get: { draftLevel },
+                        set: {
+                            draftLevel = $0
+                            store.updateVolumeDraft(channelId: channel.id, value: $0)
+                        }
+                    ),
+                    tint: tint,
+                    onEditingChanged: { editing in
+                        isInteracting = editing
+                        if editing { store.beginVolumeInteraction(channelId: channel.id) }
+                    },
+                    commit: {
+                        Task { await store.commitVolumeInteraction(channelId: channel.id, value: draftLevel) }
+                    }
+                )
                 .frame(width: 28, height: 96)
                 .disabled(!store.controlsAreAvailable)
             }
@@ -956,7 +970,7 @@ private struct LiveGoXLRVerticalFader: View {
             .disabled(!store.controlsAreAvailable)
         }
         .onChange(of: channel.volume) { _, level in
-            draftLevel = level
+            if !isInteracting { draftLevel = level }
         }
     }
 }
@@ -964,7 +978,9 @@ private struct LiveGoXLRVerticalFader: View {
 private struct GoXLRVerticalSlider: View {
     @Binding var value: Double
     let tint: Color
+    let onEditingChanged: (Bool) -> Void
     let commit: () -> Void
+    @State private var isDragging = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -994,9 +1010,17 @@ private struct GoXLRVerticalSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
+                        if !isDragging {
+                            isDragging = true
+                            onEditingChanged(true)
+                        }
                         value = min(max(1.0 - Double(gesture.location.y / geometry.size.height), 0), 1)
                     }
-                    .onEnded { _ in commit() }
+                    .onEnded { _ in
+                        isDragging = false
+                        onEditingChanged(false)
+                        commit()
+                    }
             )
         }
         .accessibilityElement()
@@ -1008,6 +1032,8 @@ private struct GoXLRVerticalSlider: View {
             case .decrement: value = max(0, value - 0.05)
             @unknown default: return
             }
+            onEditingChanged(true)
+            onEditingChanged(false)
             commit()
         }
     }
@@ -1079,7 +1105,8 @@ private struct MockGoXLRWidget: View {
                         get: { appState.mockRoomControl.goXLR.channels[index].level },
                         set: { appState.mockRoomControl.goXLR.channels[index].level = $0 }
                     ),
-                    tint: Color.controlDeckTint(named: definition.tintName)
+                    tint: Color.controlDeckTint(named: definition.tintName),
+                    onEditingChanged: { _ in }
                 ) {
                     Task { await appState.confirmMockControl("GoXLR channel level") }
                 }

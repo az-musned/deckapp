@@ -179,6 +179,18 @@ final class RemoteInputController {
         goXLR.syncControlChannels(snapshot.goXLRChannels)
     }
 
+    /// Refresh only the capability snapshot used by live GoXLR controls. Unlike the
+    /// broader security refresh, this is safe to call at a modest UI polling cadence.
+    func refreshGoXLRControlState() async {
+        guard pairingState.isPaired else { return }
+        let snapshot = await service.capabilitySnapshot()
+        // The transport represents request failures as an empty snapshot. Preserve the
+        // last known control values instead of making every fader jump to an empty state.
+        guard snapshot.goXLRConnected || !snapshot.goXLRChannels.isEmpty else { return }
+        capabilitySnapshot = snapshot
+        goXLR.syncControlChannels(snapshot.goXLRChannels)
+    }
+
     func beginPairing() async {
         await disconnect()
         do {

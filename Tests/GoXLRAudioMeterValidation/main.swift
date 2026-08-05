@@ -21,6 +21,20 @@ struct GoXLRAudioMeterValidation {
         precondition(channels[0].volume == 1, "Live meter must not overwrite the configured fader.")
         precondition(channels[0].linearPeak == 1 && channels[0].displayLevel == 0.72)
         precondition(channels[0].lastMeterUpdate == updateDate)
+
+        let controlJSON = #"{"type":"audio.meters","sequence":1843,"timestamp":1785912800124,"channels":[{"id":"mic","endpointId":null,"available":true,"linearPeak":0.4,"decibels":-20,"displayLevel":0.5,"peakHold":0.6,"clipping":false,"level":0.33,"isMuted":true}]}"#
+        let controlMessage = try JSONDecoder().decode(AudioMetersMessage.self, from: Data(controlJSON.utf8))
+        GoXLRChannelStateReducer.apply(controlMessage, to: &channels, now: updateDate)
+        precondition(channels[0].volume == 0.33 && channels[0].isMuted, "Optional live control state must be applied.")
+        channels[0].volume = 0.8
+        channels[0].isMuted = false
+        GoXLRChannelStateReducer.apply(
+            controlMessage,
+            to: &channels,
+            now: updateDate,
+            preservingControlIDs: ["mic"]
+        )
+        precondition(channels[0].volume == 0.8 && !channels[0].isMuted, "An active local interaction must win over live control state.")
         GoXLRChannelStateReducer.decay(&channels, elapsed: 5)
         precondition(channels[0].displayLevel == 0 && channels[0].peakHold == 0)
 
