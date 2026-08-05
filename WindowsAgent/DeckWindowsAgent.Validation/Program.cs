@@ -74,7 +74,7 @@ var goXlrChannels = GoXlrCapabilityService.ParseChannels("""
 {
   "mixers": {
     "SERIAL": {
-      "levels": { "volumes": { "Mic": 76, "System": 55, "Music": 62 } },
+      "levels": { "volumes": { "Mic": 128, "System": 140, "Music": 158 } },
       "fader_status": {
         "A": { "channel": "Mic", "mute_state": "Unmuted" },
         "B": { "channel": "System", "mute_state": "MutedToAll" },
@@ -85,7 +85,8 @@ var goXlrChannels = GoXlrCapabilityService.ParseChannels("""
   }
 }
 """);
-Require(goXlrChannels.Single(channel => channel.Id == "mic").Level == 0.76, "GoXLR volume state was not parsed.");
+Require(Math.Abs(goXlrChannels.Single(channel => channel.Id == "mic").Level - 128d / 255d) < 0.000001,
+    "GoXLR raw fader state was not normalized from 0-255.");
 Require(goXlrChannels.Single(channel => channel.Id == "system").IsMuted, "GoXLR mute state was not parsed.");
 
 var capabilityService = new AgentCapabilityService(
