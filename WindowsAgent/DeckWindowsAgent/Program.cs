@@ -1,9 +1,11 @@
 using System.Net;
+using DeckWindowsAgent.Audio;
 using DeckWindowsAgent.Capabilities;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Input;
 using DeckWindowsAgent.Protocol;
 using DeckWindowsAgent.Safety;
+using DeckWindowsAgent.Screen;
 using DeckWindowsAgent.Security;
 using DeckWindowsAgent.Transport;
 
@@ -20,7 +22,7 @@ builder.WebHost.ConfigureKestrel(server =>
         server.Listen(IPAddress.Parse(address), options.Port, listen => listen.UseHttps(certificate));
     }
     server.Limits.MaxRequestBodySize = 16 * 1024;
-    server.Limits.MaxConcurrentUpgradedConnections = 1;
+    server.Limits.MaxConcurrentUpgradedConnections = options.AudioMeters.MaximumClients + options.MaximumInputClients + options.ScreenStream.MaximumClients;
 });
 
 var dataDirectory = Path.Combine(
@@ -28,14 +30,25 @@ var dataDirectory = Path.Combine(
     "DeckWindowsAgent");
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(new PairingStore(Path.Combine(dataDirectory, "paired-devices.json")));
+builder.Services.AddSingleton(new AudioChannelMappingStore(Path.Combine(dataDirectory, "audio-channel-mappings.json"), options));
 builder.Services.AddSingleton<PairingService>();
-builder.Services.AddSingleton<AgentSafetyState>();
-builder.Services.AddSingleton<InputSessionRegistry>();
+builder.Services.AddSingleton(new AgentSafetyState(options.RemoteInputEnabledByDefault));
+builder.Services.AddSingleton(new InputSessionRegistry(options.MaximumInputClients));
 builder.Services.AddSingleton<IWindowsInputSink, WindowsSendInputSink>();
 builder.Services.AddSingleton<IApplicationCapabilityService, ApplicationCapabilityService>();
 builder.Services.AddSingleton<IWindowsAudioSessionService, WindowsAudioSessionService>();
 builder.Services.AddSingleton<IGoXlrCapabilityService, GoXlrCapabilityService>();
 builder.Services.AddSingleton<IAgentCapabilityService, AgentCapabilityService>();
+builder.Services.AddSingleton<IAudioEndpointMeterSource, WindowsAudioEndpointMeterSource>();
+builder.Services.AddSingleton<AudioMeterBroadcaster>();
+builder.Services.AddSingleton<AudioMeterSequence>();
+builder.Services.AddSingleton<AudioMeterService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<AudioMeterService>());
+builder.Services.AddSingleton<IScreenCaptureSource, WindowsGraphicsCaptureSource>();
+builder.Services.AddSingleton<ScreenStreamBroadcaster>();
+builder.Services.AddSingleton<ScreenStreamSequence>();
+builder.Services.AddSingleton<ScreenStreamService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<ScreenStreamService>());
 builder.Services.AddHostedService<LocalSafetyConsoleService>();
 
 var app = builder.Build();
@@ -84,6 +97,7 @@ app.MapGet("/api/v1/agent/security", (
         safety.RemoteInputAllowed,
         safety.EmergencyInputDisabled,
         input.IsAvailable,
+        safety.ScreenShareAllowed,
         PairingService.ProtocolVersion));
 });
 
@@ -121,6 +135,9 @@ app.MapPost("/api/v1/agent/commands", async (
 });
 
 app.MapInputWebSocket();
+app.MapAudioMeterEndpoints();
+app.MapAudioMeterWebSocket();
+app.MapScreenStreamWebSocket();
 
 app.Run();
 

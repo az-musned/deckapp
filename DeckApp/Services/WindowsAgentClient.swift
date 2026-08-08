@@ -28,6 +28,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         let remoteInputAllowed: Bool
         let emergencyInputDisabled: Bool
         let inputInjectionAvailable: Bool
+        let screenShareAllowed: Bool?
         let protocolVersion: Int
     }
 
@@ -354,7 +355,8 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         let state = WindowsAgentSecurityState(
             remoteInputAllowed: response.remoteInputAllowed,
             inputInjectionAvailable: response.inputInjectionAvailable,
-            emergencyInputDisabled: response.emergencyInputDisabled
+            emergencyInputDisabled: response.emergencyInputDisabled,
+            screenShareAllowed: response.screenShareAllowed ?? false
         )
         lastKnownSecurityState = state
         return (

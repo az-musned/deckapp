@@ -28,6 +28,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             Task {
                 await appState.remoteInput.goXLR.setAppActive(phase == .active)
+                await appState.remoteInput.screenMirror.setAppActive(phase == .active)
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
             }
         }

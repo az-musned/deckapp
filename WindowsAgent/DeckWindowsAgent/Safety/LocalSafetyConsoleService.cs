@@ -1,4 +1,5 @@
 using DeckWindowsAgent.Input;
+using DeckWindowsAgent.Screen;
 using DeckWindowsAgent.Security;
 
 namespace DeckWindowsAgent.Safety;
@@ -9,22 +10,25 @@ public sealed class LocalSafetyConsoleService : BackgroundService
     private readonly IWindowsInputSink _input;
     private readonly InputSessionRegistry _sessions;
     private readonly PairingService _pairing;
+    private readonly ScreenStreamBroadcaster _screenBroadcaster;
 
     public LocalSafetyConsoleService(
         AgentSafetyState safety,
         IWindowsInputSink input,
         InputSessionRegistry sessions,
-        PairingService pairing)
+        PairingService pairing,
+        ScreenStreamBroadcaster screenBroadcaster)
     {
         _safety = safety;
         _input = input;
         _sessions = sessions;
         _pairing = pairing;
+        _screenBroadcaster = screenBroadcaster;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Console.WriteLine("Local controls: [I] toggle remote input, [E] emergency disable, [P] paired devices, [R] revoke a device.");
+        Console.WriteLine("Local controls: [I] toggle remote input, [E] emergency disable, [S] toggle screen sharing, [P] paired devices, [R] revoke a device.");
         while (!stoppingToken.IsCancellationRequested)
         {
             if (Console.IsInputRedirected || !Console.KeyAvailable)
@@ -49,6 +53,11 @@ public sealed class LocalSafetyConsoleService : BackgroundService
                     await _sessions.StopAllAsync("Emergency Disable Input activated.", CancellationToken.None);
                     await _input.ReleaseAllAsync(CancellationToken.None);
                     Console.WriteLine($"Emergency Disable Input: {_safety.EmergencyInputDisabled}");
+                    break;
+                case ConsoleKey.S:
+                    _safety.SetScreenShareAllowed(!_safety.ScreenShareAllowed);
+                    if (!_safety.ScreenShareAllowed) _screenBroadcaster.DisconnectAll();
+                    Console.WriteLine($"Allow Screen Sharing: {_safety.ScreenShareAllowed}");
                     break;
                 case ConsoleKey.P:
                     foreach (var device in _pairing.PairedDevices())

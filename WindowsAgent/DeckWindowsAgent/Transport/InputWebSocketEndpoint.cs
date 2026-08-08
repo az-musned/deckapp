@@ -37,7 +37,7 @@ public static class InputWebSocketEndpoint
         if (!sessions.TryReserve(out var sessionId))
         {
             context.Response.StatusCode = StatusCodes.Status409Conflict;
-            await context.Response.WriteAsJsonAsync(new InputProtocolError("busy", "Another input session is active."));
+            await context.Response.WriteAsJsonAsync(new InputProtocolError("busy", "The maximum number of input sessions is active."));
             return;
         }
 
@@ -48,7 +48,7 @@ public static class InputWebSocketEndpoint
             socket = await context.WebSockets.AcceptWebSocketAsync();
             sessions.Attach(sessionId, socket);
             logger.LogInformation("Input session {SessionId} opened.", sessionId);
-            var processor = new InputBatchProcessor(sink);
+            var processor = new InputBatchProcessor(sink, sessionId);
             await SendJsonAsync(socket, new InputSessionHello(
                 sessionId,
                 PairingService.ProtocolVersion,
@@ -115,7 +115,7 @@ public static class InputWebSocketEndpoint
         }
         finally
         {
-            await sink.ReleaseAllAsync(CancellationToken.None);
+            await sink.ReleaseSessionAsync(sessionId, CancellationToken.None);
             sessions.End(sessionId);
             socket?.Dispose();
             logger.LogInformation("Input session {SessionId} ended: {EndReason}. Held input was released.", sessionId, endReason);

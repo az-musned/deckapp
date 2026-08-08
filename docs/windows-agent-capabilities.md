@@ -12,6 +12,19 @@ This is the implementation handoff for the Mac-side DeckApp agent. The Windows b
 
 The Mac agent should build the iOS target, resolve any Swift compiler issues, and test against a paired Windows Agent. No TLS delegate, trust-all callback, HTTP fallback, Companion route, or Home Assistant route is needed or permitted.
 
+## Live meter contract for a future Swift slice
+
+The Windows backend now exposes GoXLR virtual-endpoint signal meters, but this branch deliberately does not modify Swift. The Mac-side implementation should:
+
+1. Fetch `GET /api/v1/audio/endpoints` and present `suggestedChannelIds` as suggestions, never silently accepted mappings.
+2. Fetch `GET /api/v1/audio/channels` and explicitly map each logical channel with `PUT /api/v1/audio/channels/{channelId}/mapping`.
+3. Open authenticated `wss://<agent>/api/v1/audio/meters/ws` for 30 Hz locally, or append `?mode=reduced` for approximately 18 Hz.
+4. Apply a frame only when its `sequence` exceeds the last applied sequence.
+5. Treat GoXLR fader `level` and live `linearPeak`/`displayLevel` as different values.
+6. Display silence as zero while `available` remains true, and show unavailable only when the mapped endpoint cannot be sampled.
+
+The complete schema and errors are in `WindowsAgent/protocol-v1.md`. Normal URLSession certificate validation and the existing paired bearer credential apply to REST and WebSocket requests.
+
 ## Windows implementation points
 
 - `Capabilities/AgentCapabilityService.cs` serializes commands and returns a fresh snapshot.

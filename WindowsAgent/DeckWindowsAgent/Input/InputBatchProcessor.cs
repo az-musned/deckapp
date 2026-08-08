@@ -8,10 +8,15 @@ public sealed class InputBatchProcessor
     public const long StalePointerMilliseconds = 100;
     public const long StaleDiscreteMilliseconds = 2_000;
     private readonly IWindowsInputSink _sink;
+    private readonly Guid _sessionId;
     private ulong _lastAcceptedSequence;
     private long? _clientToServerClockOffset;
 
-    public InputBatchProcessor(IWindowsInputSink sink) => _sink = sink;
+    public InputBatchProcessor(IWindowsInputSink sink, Guid? sessionId = null)
+    {
+        _sink = sink;
+        _sessionId = sessionId ?? Guid.NewGuid();
+    }
 
     public async ValueTask<InputBatchResult> ProcessAsync(InputBatchRequest batch, CancellationToken cancellationToken)
     {
@@ -34,12 +39,12 @@ public sealed class InputBatchProcessor
         {
             if (pointerX != 0 || pointerY != 0)
             {
-                await _sink.ApplyAsync(new RelativePointerCommand(pointerX, pointerY, acceleration, precision), cancellationToken);
+                await _sink.ApplyAsync(_sessionId, new RelativePointerCommand(pointerX, pointerY, acceleration, precision), cancellationToken);
                 applied++;
             }
             if (scrollX != 0 || scrollY != 0)
             {
-                await _sink.ApplyAsync(new ScrollCommand(scrollX, scrollY), cancellationToken);
+                await _sink.ApplyAsync(_sessionId, new ScrollCommand(scrollX, scrollY), cancellationToken);
                 applied++;
             }
             pointerX = pointerY = scrollX = scrollY = 0;
@@ -83,7 +88,7 @@ public sealed class InputBatchProcessor
                 dropped++;
                 continue;
             }
-            await _sink.ApplyAsync(command, cancellationToken);
+            await _sink.ApplyAsync(_sessionId, command, cancellationToken);
             applied++;
         }
 

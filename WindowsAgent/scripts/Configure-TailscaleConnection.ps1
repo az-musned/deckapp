@@ -72,9 +72,54 @@ function Assert-TailscaleFirewallRule {
         $portFilter.LocalPort -ne $LocalPort.ToString() -or
         $addressFilter.LocalAddress -notcontains $LocalAddress -or
         $addressFilter.RemoteAddress -notcontains "100.64.0.0/10" -or
-        $interfaceFilter.InterfaceAlias -notcontains $escapedAlias) {
+        $interfaceFilter.InterfaceAlias -notcontains $escapedAlias -or
+        $rule.EdgeTraversalPolicy.ToString() -ne "Block") {
         throw "Firewall rule '$DisplayName' is broader than the required Tailscale-only scope."
     }
+}
+
+function Assert-LanFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$LocalAddress,
+        [Parameter(Mandatory = $true)][int]$LocalPort,
+        [Parameter(Mandatory = $true)][string]$InterfaceAlias
+    )
+    $rules = @(Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction Stop)
+    if ($rules.Count -ne 1) { throw "Expected exactly one firewall rule named '$DisplayName'." }
+    $rule = $rules[0]
+    $portFilter = $rule | Get-NetFirewallPortFilter
+    $addressFilter = $rule | Get-NetFirewallAddressFilter
+    $interfaceFilter = $rule | Get-NetFirewallInterfaceFilter
+    $escapedAlias = [System.Management.Automation.WildcardPattern]::Escape($InterfaceAlias)
+    if ($rule.Enabled.ToString() -ne "True" -or
+        $rule.Direction.ToString() -ne "Inbound" -or
+        $rule.Action.ToString() -ne "Allow" -or
+        $rule.Profile.ToString() -ne "Private" -or
+        $rule.EdgeTraversalPolicy.ToString() -ne "Block" -or
+        $portFilter.Protocol -ne "TCP" -or
+        $portFilter.LocalPort -ne $LocalPort.ToString() -or
+        $addressFilter.LocalAddress -notcontains $LocalAddress -or
+        $addressFilter.RemoteAddress -notcontains "LocalSubnet" -or
+        $interfaceFilter.InterfaceAlias -notcontains $escapedAlias) {
+        throw "Firewall rule '$DisplayName' is broader than the required LAN-only scope."
+    }
+}
+
+function ConvertTo-OrderedDictionary {
+    param([Parameter(ValueFromPipeline = $true)]$InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Management.Automation.PSCustomObject]) {
+        $result = [ordered]@{}
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $result[$property.Name] = ConvertTo-OrderedDictionary $property.Value
+        }
+        return $result
+    }
+    if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+        return @($InputObject | ForEach-Object { ConvertTo-OrderedDictionary $_ })
+    }
+    return $InputObject
 }
 
 $tailscaleRecords = @(
@@ -198,33 +243,31 @@ if ($null -eq $trustedRoot) {
     Import-Certificate -FilePath $rootExportPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
 }
 
-$capabilitySettings = [ordered]@{
-    WindowsAudioEnabled = $true
-    GoXlrEnabled = $true
-    GoXlrClientPath = ""
-    Applications = @()
-}
+$settings = [ordered]@{}
 if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
-    $existingSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-    if ($null -ne $existingSettings.Agent -and $null -ne $existingSettings.Agent.Capabilities) {
-        $capabilitySettings = $existingSettings.Agent.Capabilities
+    $settings = ConvertTo-OrderedDictionary (Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json)
+}
+
+if (-not $settings.Contains("Agent")) { $settings["Agent"] = [ordered]@{} }
+$agentSettings = $settings["Agent"]
+if (-not $agentSettings.Contains("Capabilities")) {
+    $agentSettings["Capabilities"] = [ordered]@{
+        WindowsAudioEnabled = $true
+        GoXlrEnabled = $true
+        GoXlrClientPath = ""
+        Applications = @()
     }
 }
 
 $agentBindAddresses = @($BindAddress)
 if ($EnableLocalNetwork) { $agentBindAddresses = @($LocalBindAddress, $BindAddress) }
 
-$settings = [ordered]@{
-    Agent = [ordered]@{
-        BindAddress = $BindAddress
-        BindAddresses = $agentBindAddresses
-        Port = $AgentPort
-        CertificateThumbprint = $serverCertificate.Thumbprint
-        PairingCodeLifetimeSeconds = 120
-        MaximumPairingAttempts = 5
-        Capabilities = $capabilitySettings
-    }
-}
+$agentSettings["BindAddress"] = $BindAddress
+$agentSettings["BindAddresses"] = $agentBindAddresses
+$agentSettings["Port"] = $AgentPort
+$agentSettings["CertificateThumbprint"] = $serverCertificate.Thumbprint
+if (-not $agentSettings.Contains("PairingCodeLifetimeSeconds")) { $agentSettings["PairingCodeLifetimeSeconds"] = 120 }
+if (-not $agentSettings.Contains("MaximumPairingAttempts")) { $agentSettings["MaximumPairingAttempts"] = 5 }
 $settings | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
 if (-not $SkipFirewall) {
@@ -265,6 +308,11 @@ if (-not $SkipFirewall) {
                 -Profile Private `
                 -EdgeTraversalPolicy Block | Out-Null
         }
+        Assert-LanFirewallRule `
+            -DisplayName $localAgentRuleName `
+            -LocalAddress $LocalBindAddress `
+            -LocalPort $AgentPort `
+            -InterfaceAlias $localInterfaceAlias
     }
 
     if ($AllowCompanion) {
@@ -305,6 +353,11 @@ if (-not $SkipFirewall) {
                     -Profile Private `
                     -EdgeTraversalPolicy Block | Out-Null
             }
+            Assert-LanFirewallRule `
+                -DisplayName $localCompanionRuleName `
+                -LocalAddress $LocalBindAddress `
+                -LocalPort $CompanionPort `
+                -InterfaceAlias $localInterfaceAlias
         }
     }
 }

@@ -86,6 +86,67 @@ Command names are case-sensitive. The spelling is `GoXlr` on the JSON wire even 
 
 The Agent cannot receive an executable path or arguments from the network. It does not start the GoXLR Utility daemon or switch device managers. It never logs full command bodies, typed text, credentials, or audio payloads.
 
+## Audio endpoint mapping
+
+These endpoints require the paired bearer credential and remain independent from Allow Remote Input.
+
+`GET /api/v1/audio/endpoints` returns active Windows render and capture endpoints. `isGoXlrCandidate` and `suggestedChannelIds` are advisory; the Agent never applies a suggestion automatically.
+
+```json
+{
+  "endpoints": [
+    {
+      "id": "{0.0.0.00000000}.{opaque-windows-id}",
+      "displayName": "Music (TC-Helicon GoXLR Mini)",
+      "dataFlow": "render",
+      "isGoXlrCandidate": true,
+      "suggestedChannelIds": ["music"]
+    }
+  ],
+  "protocolVersion": 1
+}
+```
+
+`GET /api/v1/audio/channels` returns logical channels, persisted endpoint IDs, and whether each mapped endpoint is active.
+
+`PUT /api/v1/audio/channels/{channelId}/mapping` persists an explicit mapping:
+
+```json
+{ "endpointId": "{0.0.0.00000000}.{opaque-windows-id}" }
+```
+
+An unknown channel or inactive endpoint returns `409`; malformed input returns `400`. A mapping survives rename/disconnect, but Windows may assign a new ID when recreating an endpoint, requiring explicit remapping.
+
+## Live audio meter WebSocket
+
+Connect to `wss://<private-agent-address>:8732/api/v1/audio/meters/ws` with the paired bearer credential. This dedicated low-priority stream never shares the input WebSocket. The server sends a full snapshot immediately and then publishes at approximately 30 Hz. Add `?mode=reduced` or `?mode=remote` for approximately 18 Hz. Up to four authenticated meter clients are accepted by default; only one input client is still permitted.
+
+```json
+{
+  "type": "audio.meters",
+  "sequence": 1842,
+  "timestamp": 1785912800123,
+  "channels": [
+    {
+      "id": "music",
+      "displayName": "Music",
+      "endpointId": "{0.0.0.00000000}.{opaque-windows-id}",
+      "available": true,
+      "linearPeak": 0.82,
+      "decibels": -1.72,
+      "displayLevel": 0.97,
+      "peakHold": 0.99,
+      "clipping": false
+    }
+  ],
+  "protocolVersion": 1
+}
+```
+
+`sequence` increases monotonically so clients can discard stale frames. `linearPeak` is the raw Windows endpoint amplitude from 0 through 1. `decibels` is `20 * log10(max(linearPeak, 0.000001))`, clamped to `-60...0`. `displayLevel` and `peakHold` are normalized visual values with fast attack, slower decay, and approximately 750 ms hold. `clipping` begins near 0 dB. Silence is available with a near-zero peak; `available: false` means the mapped endpoint cannot be sampled.
+
+Frames are transient and never persisted. Each client has a one-frame bounded queue, so a slow client drops superseded frames instead of delaying polling, GoXLR commands, or input processing.
+
 ## Input endpoint
 
 Connect a WebSocket to `wss://<private-agent-address>:8732/api/v1/agent/input` with the bearer credential. Only one input session is accepted. The server replies with a `ready` message containing `sessionId`, `protocolVersion`, and `serverTimestampMilliseconds`.

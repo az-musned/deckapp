@@ -10,7 +10,11 @@ public sealed class AgentOptions
     public string CertificateThumbprint { get; init; } = string.Empty;
     public int PairingCodeLifetimeSeconds { get; init; } = 120;
     public int MaximumPairingAttempts { get; init; } = 5;
+    public bool RemoteInputEnabledByDefault { get; init; } = true;
+    public int MaximumInputClients { get; init; } = 2;
     public CapabilityOptions Capabilities { get; init; } = new();
+    public AudioMeterOptions AudioMeters { get; init; } = new();
+    public ScreenStreamOptions ScreenStream { get; init; } = new();
 
     public void Validate()
     {
@@ -35,13 +39,82 @@ public sealed class AgentOptions
         {
             throw new InvalidOperationException("Pairing safety settings are outside their allowed ranges.");
         }
+        if (MaximumInputClients is < 1 or > 4)
+            throw new InvalidOperationException("Agent:MaximumInputClients must be between 1 and 4.");
 
         Capabilities.Validate();
+        AudioMeters.Validate();
+        ScreenStream.Validate();
     }
 
     public IReadOnlyList<string> EffectiveBindAddresses => BindAddresses.Length > 0
         ? BindAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         : [BindAddress];
+}
+
+public sealed class AudioMeterOptions
+{
+    public bool Enabled { get; init; } = true;
+    public int LocalUpdatesPerSecond { get; init; } = 30;
+    public int ReducedUpdatesPerSecond { get; init; } = 18;
+    public int MaximumClients { get; init; } = 4;
+    public bool DiagnosticLoggingEnabled { get; init; }
+    public int DiagnosticLogIntervalSeconds { get; init; } = 30;
+    public List<AudioMeterChannelOptions> Channels { get; init; } = [];
+
+    public void Validate()
+    {
+        if (LocalUpdatesPerSecond is < 1 or > 60 || ReducedUpdatesPerSecond is < 1 or > 30)
+            throw new InvalidOperationException("Audio meter update rates are outside their allowed ranges.");
+        if (MaximumClients is < 1 or > 8)
+            throw new InvalidOperationException("Agent:AudioMeters:MaximumClients must be between 1 and 8.");
+        if (DiagnosticLogIntervalSeconds is < 10 or > 3600)
+            throw new InvalidOperationException("Audio meter diagnostic logging interval must be between 10 and 3600 seconds.");
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var channel in Channels)
+        {
+            if (channel.Id.Length is < 1 or > 64 || channel.Id.Any(character =>
+                    !(char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-')))
+                throw new InvalidOperationException("Audio meter channel IDs contain unsupported characters.");
+            if (!ids.Add(channel.Id)) throw new InvalidOperationException($"Duplicate audio meter channel ID '{channel.Id}'.");
+            if (string.IsNullOrWhiteSpace(channel.DisplayName) || channel.DisplayName.Length > 100)
+                throw new InvalidOperationException($"Audio meter channel '{channel.Id}' needs a display name.");
+            if (channel.EndpointId is { Length: > 1024 })
+                throw new InvalidOperationException($"Audio meter channel '{channel.Id}' endpoint ID is too long.");
+        }
+    }
+}
+
+public sealed class AudioMeterChannelOptions
+{
+    public string Id { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
+    public string? EndpointId { get; init; }
+}
+
+public sealed class ScreenStreamOptions
+{
+    public bool Enabled { get; init; } = true;
+    public int TargetFps { get; init; } = 15;
+    public int MaxWidth { get; init; } = 1920;
+    public int JpegQuality { get; init; } = 70;
+    public int MaximumClients { get; init; } = 2;
+    public int MonitorIndex { get; init; }
+
+    public void Validate()
+    {
+        if (TargetFps is < 5 or > 30)
+            throw new InvalidOperationException("Agent:ScreenStream:TargetFps must be between 5 and 30.");
+        if (MaxWidth is < 640 or > 3840)
+            throw new InvalidOperationException("Agent:ScreenStream:MaxWidth must be between 640 and 3840.");
+        if (JpegQuality is < 1 or > 100)
+            throw new InvalidOperationException("Agent:ScreenStream:JpegQuality must be between 1 and 100.");
+        if (MaximumClients is < 1 or > 4)
+            throw new InvalidOperationException("Agent:ScreenStream:MaximumClients must be between 1 and 4.");
+        if (MonitorIndex < 0)
+            throw new InvalidOperationException("Agent:ScreenStream:MonitorIndex must be zero or greater.");
+    }
 }
 
 public sealed class CapabilityOptions

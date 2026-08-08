@@ -3,7 +3,8 @@ namespace DeckWindowsAgent.Input;
 public interface IWindowsInputSink
 {
     bool IsAvailable { get; }
-    ValueTask ApplyAsync(AgentInputCommand command, CancellationToken cancellationToken = default);
+    ValueTask ApplyAsync(Guid sessionId, AgentInputCommand command, CancellationToken cancellationToken = default);
+    ValueTask ReleaseSessionAsync(Guid sessionId, CancellationToken cancellationToken = default);
     ValueTask ReleaseAllAsync(CancellationToken cancellationToken = default);
 }
 

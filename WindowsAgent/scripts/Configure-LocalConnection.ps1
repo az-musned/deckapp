@@ -168,10 +168,18 @@ $capabilitySettings = [ordered]@{
     GoXlrClientPath = ""
     Applications = @()
 }
+$audioMeterSettings = $null
 if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
     $existingSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-    if ($null -ne $existingSettings.Agent -and $null -ne $existingSettings.Agent.Capabilities) {
+    if ($null -ne $existingSettings.Agent -and
+        $null -ne $existingSettings.Agent.PSObject.Properties["Capabilities"] -and
+        $null -ne $existingSettings.Agent.Capabilities) {
         $capabilitySettings = $existingSettings.Agent.Capabilities
+    }
+    if ($null -ne $existingSettings.Agent -and
+        $null -ne $existingSettings.Agent.PSObject.Properties["AudioMeters"] -and
+        $null -ne $existingSettings.Agent.AudioMeters) {
+        $audioMeterSettings = $existingSettings.Agent.AudioMeters
     }
 }
 
@@ -185,6 +193,7 @@ $settings = [ordered]@{
         Capabilities = $capabilitySettings
     }
 }
+if ($null -ne $audioMeterSettings) { $settings.Agent["AudioMeters"] = $audioMeterSettings }
 $settings | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
 if (-not $SkipFirewall) {
@@ -203,7 +212,7 @@ if (-not $SkipFirewall) {
             -LocalAddress $BindAddress `
             -LocalPort $Port `
             -RemoteAddress LocalSubnet `
-            -Profile Any `
+            -Profile Private `
             -InterfaceAlias ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias)) `
             -EdgeTraversalPolicy Block | Out-Null
     }
@@ -215,6 +224,8 @@ if (-not $SkipFirewall) {
     if ($firewallRule.Enabled.ToString() -ne "True" -or
         $firewallRule.Direction.ToString() -ne "Inbound" -or
         $firewallRule.Action.ToString() -ne "Allow" -or
+        $firewallRule.Profile.ToString() -ne "Private" -or
+        $firewallRule.EdgeTraversalPolicy.ToString() -ne "Block" -or
         $portFilter.Protocol -ne "TCP" -or
         $portFilter.LocalPort -ne $Port.ToString() -or
         $addressFilter.LocalAddress -notcontains $BindAddress -or

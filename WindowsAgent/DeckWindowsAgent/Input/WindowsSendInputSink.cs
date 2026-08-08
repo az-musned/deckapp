@@ -23,16 +23,16 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
     private const int WheelScale = 12;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly HashSet<ushort> _heldKeys = [];
+    private readonly Dictionary<ushort, HashSet<Guid>> _heldKeys = [];
     private readonly List<ushort> _keyPressOrder = [];
-    private readonly HashSet<string> _heldMouseButtons = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<ushort>> _transientModifiers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<Guid>> _heldMouseButtons = new(StringComparer.Ordinal);
+    private readonly Dictionary<(Guid SessionId, string Key), List<ushort>> _transientModifiers = [];
 
     public bool IsAvailable => OperatingSystem.IsWindows()
         && Environment.UserInteractive
         && IsDefaultInputDesktop();
 
-    public async ValueTask ApplyAsync(AgentInputCommand command, CancellationToken cancellationToken = default)
+    public async ValueTask ApplyAsync(Guid sessionId, AgentInputCommand command, CancellationToken cancellationToken = default)
     {
         if (!IsAvailable) throw new InputInjectionException("Windows input injection is unavailable in this session.");
         await _gate.WaitAsync(cancellationToken);
@@ -47,14 +47,14 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                     SendScroll(scroll);
                     break;
                 case MouseButtonCommand button:
-                    ApplyMouseButton(button);
+                    ApplyMouseButton(sessionId, button);
                     break;
                 case ModifierCommand modifier:
                     foreach (var key in ModifierKeys(modifier.Modifiers))
-                        ApplyKey(key, modifier.IsDown);
+                        ApplyKey(sessionId, key, modifier.IsDown);
                     break;
                 case VirtualKeyCommand key:
-                    ApplyVirtualKey(key);
+                    ApplyVirtualKey(sessionId, key);
                     break;
                 case UnicodeTextCommand text:
                     ApplyUnicodeText(text.Text);
@@ -62,7 +62,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                 case ClipboardTextCommand:
                     throw new InputInjectionException("Clipboard actions are not enabled in this Agent build.");
                 case ReleaseAllCommand:
-                    ReleaseAllInternal();
+                    ReleaseSessionInternal(sessionId);
                     break;
                 default:
                     throw new InputInjectionException("Unsupported input command.");
@@ -79,6 +79,13 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         }
     }
 
+    public async ValueTask ReleaseSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try { ReleaseSessionBestEffort(sessionId); }
+        finally { _gate.Release(); }
+    }
+
     public async ValueTask ReleaseAllAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -86,7 +93,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         finally { _gate.Release(); }
     }
 
-    private void ApplyVirtualKey(VirtualKeyCommand command)
+    private void ApplyVirtualKey(Guid sessionId, VirtualKeyCommand command)
     {
         var (key, implicitModifiers) = ResolveVirtualKey(command.Key);
         var requestedModifiers = ModifierKeys(command.Modifiers).Concat(implicitModifiers).Distinct().ToArray();
@@ -95,32 +102,38 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
             var transient = new List<ushort>();
             foreach (var modifier in requestedModifiers)
             {
-                if (_heldKeys.Contains(modifier)) continue;
-                ApplyKey(modifier, true);
+                if (_heldKeys.TryGetValue(modifier, out var owners) && owners.Contains(sessionId)) continue;
+                ApplyKey(sessionId, modifier, true);
                 transient.Add(modifier);
             }
-            _transientModifiers[command.Key] = transient;
-            ApplyKey(key, true);
+            _transientModifiers[(sessionId, command.Key)] = transient;
+            ApplyKey(sessionId, key, true);
         }
         else
         {
-            ApplyKey(key, false);
-            if (_transientModifiers.Remove(command.Key, out var transient))
+            ApplyKey(sessionId, key, false);
+            if (_transientModifiers.Remove((sessionId, command.Key), out var transient))
             {
-                foreach (var modifier in transient.AsEnumerable().Reverse()) ApplyKey(modifier, false);
+                foreach (var modifier in transient.AsEnumerable().Reverse()) ApplyKey(sessionId, modifier, false);
             }
         }
     }
 
-    private void ApplyKey(ushort key, bool isDown)
+    private void ApplyKey(Guid sessionId, ushort key, bool isDown)
     {
-        if (isDown && _heldKeys.Contains(key)) return;
-        if (!isDown && !_heldKeys.Contains(key)) return;
+        if (!_heldKeys.TryGetValue(key, out var owners))
+        {
+            owners = [];
+            _heldKeys[key] = owners;
+        }
+        if (isDown && !owners.Add(sessionId)) return;
+        if (!isDown && !owners.Remove(sessionId)) return;
+        if (isDown && owners.Count > 1) return;
+        if (!isDown && owners.Count > 0) return;
         var flags = (IsExtendedKey(key) ? KeyExtended : 0) | (isDown ? 0u : KeyUp);
         SendChecked([KeyboardInput(key, '\0', flags)]);
         if (isDown)
         {
-            _heldKeys.Add(key);
             _keyPressOrder.Add(key);
         }
         else
@@ -141,11 +154,18 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         }
     }
 
-    private void ApplyMouseButton(MouseButtonCommand command)
+    private void ApplyMouseButton(Guid sessionId, MouseButtonCommand command)
     {
         var normalized = command.Button.ToLowerInvariant();
-        if (command.IsDown && _heldMouseButtons.Contains(normalized)) return;
-        if (!command.IsDown && !_heldMouseButtons.Contains(normalized)) return;
+        if (!_heldMouseButtons.TryGetValue(normalized, out var owners))
+        {
+            owners = [];
+            _heldMouseButtons[normalized] = owners;
+        }
+        if (command.IsDown && !owners.Add(sessionId)) return;
+        if (!command.IsDown && !owners.Remove(sessionId)) return;
+        if (command.IsDown && owners.Count > 1) return;
+        if (!command.IsDown && owners.Count > 0) return;
         var flags = (normalized, command.IsDown) switch
         {
             ("left", true) => LeftDown, ("left", false) => LeftUp,
@@ -154,8 +174,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
             _ => throw new InputInjectionException("Unknown mouse button.")
         };
         SendChecked([MouseInput(0, 0, 0, flags)]);
-        if (command.IsDown) _heldMouseButtons.Add(normalized);
-        else _heldMouseButtons.Remove(normalized);
+        if (!command.IsDown) _heldMouseButtons.Remove(normalized);
     }
 
     private static void SendMouse((int X, int Y) delta)
@@ -184,7 +203,7 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
     private void ReleaseAllInternal()
     {
         var releases = new List<NativeInput>();
-        foreach (var button in _heldMouseButtons)
+        foreach (var button in _heldMouseButtons.Keys)
         {
             var flags = button switch
             {
@@ -202,6 +221,46 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         _heldKeys.Clear();
         _keyPressOrder.Clear();
         _transientModifiers.Clear();
+    }
+
+    private void ReleaseSessionInternal(Guid sessionId)
+    {
+        var releases = new List<NativeInput>();
+        foreach (var pair in _heldMouseButtons.ToArray())
+        {
+            if (!pair.Value.Remove(sessionId) || pair.Value.Count > 0) continue;
+            var flags = pair.Key switch
+            {
+                "left" => LeftUp,
+                "right" => RightUp,
+                "middle" => MiddleUp,
+                _ => 0u
+            };
+            if (flags != 0) releases.Add(MouseInput(0, 0, 0, flags));
+            _heldMouseButtons.Remove(pair.Key);
+        }
+        foreach (var pair in _heldKeys.ToArray())
+        {
+            if (!pair.Value.Remove(sessionId) || pair.Value.Count > 0) continue;
+            releases.Add(KeyboardInput(pair.Key, '\0', KeyUp | (IsExtendedKey(pair.Key) ? KeyExtended : 0)));
+            _heldKeys.Remove(pair.Key);
+            _keyPressOrder.Remove(pair.Key);
+        }
+        foreach (var transient in _transientModifiers.Keys.Where(value => value.SessionId == sessionId).ToArray())
+            _transientModifiers.Remove(transient);
+        if (releases.Count > 0) SendChecked([.. releases]);
+    }
+
+    private void ReleaseSessionBestEffort(Guid sessionId)
+    {
+        try { ReleaseSessionInternal(sessionId); }
+        catch
+        {
+            foreach (var owners in _heldKeys.Values) owners.Remove(sessionId);
+            foreach (var owners in _heldMouseButtons.Values) owners.Remove(sessionId);
+            foreach (var transient in _transientModifiers.Keys.Where(value => value.SessionId == sessionId).ToArray())
+                _transientModifiers.Remove(transient);
+        }
     }
 
     private void ReleaseAllBestEffort()

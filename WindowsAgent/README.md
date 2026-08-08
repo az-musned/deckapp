@@ -57,6 +57,32 @@ Windows audio discovery reads the active sessions on the default multimedia outp
 
 GoXLR support uses the community [GoXLR Utility](https://github.com/GoXLR-on-Linux/goxlr-utility) client/API. If `C:\Program Files\GoXLR Utility\goxlr-client.exe` exists it is discovered automatically, or set an absolute `GoXlrClientPath`. The GoXLR Utility daemon must already be managing the device. Do not run it alongside another manager that owns the GoXLR; when unavailable, the Agent reports `goXlrConnected: false` and makes no device change. Channel levels are 0–1 on the Deck protocol. GoXLR Utility status reports raw 0–255 fader values while its CLI accepts 0–100 percentages. Mute is exposed only for a channel assigned to a physical fader.
 
+### Live GoXLR meters
+
+Live meters are separate from GoXLR Utility fader values. A fader/volume value is configured gain; a meter is the instantaneous audio signal. The Agent uses Windows Core Audio `IAudioMeterInformation`, through the stable NAudio 2.x WASAPI package, to sample active render and capture endpoints. It never reads or stores audio samples.
+
+Discovery recognizes likely GoXLR devices using manufacturer/product indicators and returns channel suggestions based on normalized name tokens. Suggestions are never applied automatically. Display names may vary by language and installation, so durable mappings use Windows endpoint IDs.
+
+Paired clients can:
+
+- `GET /api/v1/audio/endpoints` to list active render/capture endpoints and suggestions.
+- `GET /api/v1/audio/channels` to list logical channels and mappings.
+- `PUT /api/v1/audio/channels/{channelId}/mapping` with `{ "endpointId": "..." }` to persist a mapping.
+- Connect to `wss://<private-agent-address>:8732/api/v1/audio/meters/ws` for 30 Hz snapshots.
+- Add `?mode=reduced` or `?mode=remote` for an 18 Hz reduced-bandwidth stream.
+
+All operations require the paired bearer credential. The meter socket is separate from the high-priority input socket and supports up to four clients by default. With no subscriber, sampling falls to 2 Hz. Discovery refreshes every five seconds, so a reconnected endpoint recovers automatically; a recreated endpoint may receive a new ID and require remapping.
+
+Frames contain raw linear peak, clamped decibels (`-60` through `0` dB), fast-attack/slow-decay display level, 750 ms peak hold, clipping, availability, timestamp, and a monotonic sequence. A silent accessible endpoint reports zero and `available: true`. Windows virtual endpoint meters may differ from physical GoXLR LEDs after hardware routing and processing.
+
+To print one non-mutating endpoint/peak diagnostic snapshot:
+
+```powershell
+dotnet run --project WindowsAgent/DeckWindowsAgent.Validation/DeckWindowsAgent.Validation.csproj -- --audio-diagnostics
+```
+
+For periodic diagnostics, set `Agent:AudioMeters:DiagnosticLoggingEnabled` in ignored local settings. Logging is off by default and rate-limited; live values are never persisted.
+
 Applications and games must be explicitly allowlisted in ignored `appsettings.Local.json`:
 
 ```json
@@ -74,12 +100,23 @@ Applications and games must be explicitly allowlisted in ignored `appsettings.Lo
           "ExecutablePath": "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"
         }
       ]
+    },
+    "AudioMeters": {
+      "Enabled": true,
+      "LocalUpdatesPerSecond": 30,
+      "ReducedUpdatesPerSecond": 18,
+      "MaximumClients": 4,
+      "DiagnosticLoggingEnabled": false,
+      "DiagnosticLogIntervalSeconds": 30,
+      "Channels": [
+        { "Id": "music", "DisplayName": "Music", "EndpointId": "{windows-endpoint-id}" }
+      ]
     }
   }
 }
 ```
 
-`Kind` is `application` or `game`. Re-running `Configure-LocalConnection.ps1` preserves an existing `Agent:Capabilities` section. See [protocol-v1.md](protocol-v1.md) for the wire format and [windows-agent-capabilities.md](../docs/windows-agent-capabilities.md) for the Mac/iOS handoff.
+`Kind` is `application` or `game`. Runtime mappings are stored in `%LOCALAPPDATA%\DeckWindowsAgent\audio-channel-mappings.json`; configured endpoint IDs seed that store. Re-running `Configure-LocalConnection.ps1` preserves existing `Agent:Capabilities` and `Agent:AudioMeters` sections. See [protocol-v1.md](protocol-v1.md) for the wire format and [windows-agent-capabilities.md](../docs/windows-agent-capabilities.md) for the Mac/iOS handoff.
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
 

@@ -5,16 +5,18 @@ namespace DeckWindowsAgent.Input;
 public sealed class InputSessionRegistry
 {
     private readonly object _gate = new();
-    private Guid? _sessionId;
-    private WebSocket? _socket;
+    private readonly int _maximumSessions;
+    private readonly Dictionary<Guid, WebSocket?> _sessions = [];
+
+    public InputSessionRegistry(int maximumSessions = 2) => _maximumSessions = maximumSessions;
 
     public bool TryReserve(out Guid sessionId)
     {
         lock (_gate)
         {
-            if (_sessionId is not null) { sessionId = Guid.Empty; return false; }
+            if (_sessions.Count >= _maximumSessions) { sessionId = Guid.Empty; return false; }
             sessionId = Guid.NewGuid();
-            _sessionId = sessionId;
+            _sessions[sessionId] = null;
             return true;
         }
     }
@@ -23,8 +25,8 @@ public sealed class InputSessionRegistry
     {
         lock (_gate)
         {
-            if (_sessionId != sessionId) throw new InvalidOperationException("Input session reservation was lost.");
-            _socket = socket;
+            if (!_sessions.ContainsKey(sessionId)) throw new InvalidOperationException("Input session reservation was lost.");
+            _sessions[sessionId] = socket;
         }
     }
 
@@ -32,17 +34,15 @@ public sealed class InputSessionRegistry
     {
         lock (_gate)
         {
-            if (_sessionId != sessionId) return;
-            _socket = null;
-            _sessionId = null;
+            _sessions.Remove(sessionId);
         }
     }
 
     public async ValueTask StopAllAsync(string reason, CancellationToken cancellationToken = default)
     {
-        WebSocket? socket;
-        lock (_gate) socket = _socket;
-        if (socket?.State == WebSocketState.Open)
+        WebSocket[] sockets;
+        lock (_gate) sockets = _sessions.Values.OfType<WebSocket>().ToArray();
+        foreach (var socket in sockets.Where(value => value.State == WebSocketState.Open))
         {
             try { await socket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, reason, cancellationToken); }
             catch (WebSocketException) { socket.Abort(); }

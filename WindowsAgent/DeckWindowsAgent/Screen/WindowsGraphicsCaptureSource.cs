@@ -1,0 +1,174 @@
+using System.Runtime.InteropServices;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
+using WinRT;
+using Windows.Graphics.Capture;
+using Windows.Graphics.DirectX;
+using Windows.Graphics.DirectX.Direct3D11;
+
+namespace DeckWindowsAgent.Screen;
+
+public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
+{
+    private readonly ID3D11Device _device;
+    private readonly ID3D11DeviceContext _context;
+    private readonly IDirect3DDevice _direct3DDevice;
+    private readonly GraphicsCaptureItem _item;
+    private readonly Direct3D11CaptureFramePool _framePool;
+    private readonly GraphicsCaptureSession _session;
+    private readonly object _gate = new();
+    private bool _disposed;
+
+    public WindowsGraphicsCaptureSource()
+    {
+        var featureLevels = new[] { FeatureLevel.Level_11_1, FeatureLevel.Level_11_0 };
+        D3D11.D3D11CreateDevice(
+            null,
+            DriverType.Hardware,
+            DeviceCreationFlags.BgraSupport,
+            featureLevels,
+            out _device!).CheckError();
+        _context = _device.ImmediateContext;
+
+        _direct3DDevice = CreateDirect3DDeviceFromD3D11Device(_device);
+
+        var monitor = NativeMethods.MonitorFromWindow(IntPtr.Zero, NativeMethods.MonitorDefaultToPrimary);
+        _item = GraphicsCaptureItemInterop.CreateItemForMonitor(monitor);
+
+        _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+            _direct3DDevice,
+            DirectXPixelFormat.B8G8R8A8UIntNormalized,
+            2,
+            _item.Size);
+        _session = _framePool.CreateCaptureSession(_item);
+        _session.IsCursorCaptureEnabled = true;
+        _session.StartCapture();
+    }
+
+    public bool IsAvailable => !_disposed;
+
+    public bool TryCaptureFrame(out CapturedFrame frame)
+    {
+        frame = default;
+        if (_disposed) return false;
+
+        lock (_gate)
+        {
+            using var captured = _framePool.TryGetNextFrame();
+            if (captured is null) return false;
+
+            var access = captured.Surface.As<IDirect3DDxgiInterfaceAccess>();
+            var textureIid = typeof(ID3D11Texture2D).GUID;
+            var texturePointer = access.GetInterface(ref textureIid);
+            using var texture = new ID3D11Texture2D(texturePointer);
+            var description = texture.Description;
+
+            var stagingDescription = description with
+            {
+                Usage = ResourceUsage.Staging,
+                BindFlags = BindFlags.None,
+                CPUAccessFlags = CpuAccessFlags.Read,
+                MiscFlags = ResourceOptionFlags.None,
+            };
+
+            using var staging = _device.CreateTexture2D(stagingDescription);
+            _context.CopyResource(staging, texture);
+
+            var mapped = _context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+            try
+            {
+                var rowPitch = (int)mapped.RowPitch;
+                var bytes = new byte[rowPitch * (int)description.Height];
+                Marshal.Copy(mapped.DataPointer, bytes, 0, bytes.Length);
+                frame = new CapturedFrame((int)description.Width, (int)description.Height, rowPitch, bytes);
+                return true;
+            }
+            finally
+            {
+                _context.Unmap(staging, 0);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        lock (_gate)
+        {
+            _session.Dispose();
+            _framePool.Dispose();
+            _direct3DDevice.Dispose();
+            _context.Dispose();
+            _device.Dispose();
+        }
+    }
+
+    private static IDirect3DDevice CreateDirect3DDeviceFromD3D11Device(ID3D11Device device)
+    {
+        using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+        NativeMethods.CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.NativePointer, out var inspectable);
+        return MarshalInterface<IDirect3DDevice>.FromAbi(inspectable)
+            ?? throw new InvalidOperationException("Failed to project the Direct3D11 device to a WinRT IDirect3DDevice.");
+    }
+
+    [ComImport]
+    [Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IDirect3DDxgiInterfaceAccess
+    {
+        IntPtr GetInterface(ref Guid iid);
+    }
+
+    private static class NativeMethods
+    {
+        public const uint MonitorDefaultToPrimary = 1;
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+        [DllImport("d3d11.dll", ExactSpelling = true, PreserveSig = false)]
+        public static extern void CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
+    }
+
+    private static class GraphicsCaptureItemInterop
+    {
+        public static GraphicsCaptureItem CreateItemForMonitor(IntPtr monitorHandle)
+        {
+            var activationFactoryIid = typeof(IGraphicsCaptureItemInterop).GUID;
+            RoGetActivationFactory(
+                "Windows.Graphics.Capture.GraphicsCaptureItem",
+                ref activationFactoryIid,
+                out var factoryPointer);
+            try
+            {
+                var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPointer);
+                var itemGuid = typeof(GraphicsCaptureItem).GUID;
+                var itemPointer = interop.CreateForMonitor(monitorHandle, ref itemGuid);
+                return GraphicsCaptureItem.FromAbi(itemPointer) is GraphicsCaptureItem item
+                    ? item
+                    : throw new InvalidOperationException("Failed to create a GraphicsCaptureItem for the target monitor.");
+            }
+            finally
+            {
+                Marshal.Release(factoryPointer);
+            }
+        }
+
+        [DllImport("combase.dll", ExactSpelling = true, PreserveSig = false)]
+        private static extern void RoGetActivationFactory(
+            [MarshalAs(UnmanagedType.HString)] string activatableClassId,
+            ref Guid iid,
+            out IntPtr factory);
+
+        [ComImport]
+        [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IGraphicsCaptureItemInterop
+        {
+            IntPtr CreateForWindow(IntPtr window, ref Guid iid);
+            IntPtr CreateForMonitor(IntPtr monitor, ref Guid iid);
+        }
+    }
+}
