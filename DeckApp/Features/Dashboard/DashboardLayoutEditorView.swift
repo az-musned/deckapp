@@ -246,6 +246,22 @@ private struct WidgetConfigurationView: View {
                     } footer: {
                         Text("Govee widgets automatically use only the controls reported by the selected device. Choose a larger widget size to show more controls.")
                     }
+                } else if widget.kind == .television {
+                    Section {
+                        Picker("Source", selection: televisionSourceBinding) {
+                            Text("Mock TV").tag("mock")
+                            ForEach(appState.lgTV.devices) { device in
+                                Text("LG webOS · \(device.name)").tag("lg:\(device.id.uuidString)")
+                            }
+                        }
+                        if appState.lgTV.devices.isEmpty {
+                            Text("Add and pair a TV in Settings first.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Device Mapping")
+                    } footer: {
+                        Text("LG webOS widgets connect directly over your local network. Pairing keys stay in Keychain.")
+                    }
                 } else if widget.kind == .audioMixer {
                     Section {
                         Picker("Source", selection: audioMixerSourceBinding) {
@@ -374,6 +390,24 @@ private struct WidgetConfigurationView: View {
         }
     }
 
+    private var televisionSourceBinding: Binding<String> {
+        Binding {
+            widget.backend.backend == .lgWebOS ? "lg:\(widget.backend.identifier)" : "mock"
+        } set: { selection in
+            if selection == "mock" {
+                widget.backend = WidgetBackendReference(backend: .mock, identifier: "mock.media_player.lg_tv")
+                widget.subtitle = "Mock webOS television"
+            } else if selection.hasPrefix("lg:"),
+                      let id = UUID(uuidString: String(selection.dropFirst(3))),
+                      let device = appState.lgTV.devices.first(where: { $0.id == id }) {
+                widget.backend = WidgetBackendReference(backend: .lgWebOS, identifier: device.id.uuidString)
+                widget.subtitle = "Direct LG webOS · \(device.name)"
+                widget.capabilities = MockCapabilities.television
+                if widget.title == "LG TV" { widget.title = device.name }
+            }
+        }
+    }
+
     private var selectedAudioMixerChannelIDs: [String] {
         widget.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
     }
@@ -454,6 +488,7 @@ private extension WidgetBackendKind {
         case .govee: "Govee"
         case .windowsAgent: "Windows Agent"
         case .companion: "Companion"
+        case .lgWebOS: "LG webOS"
         }
     }
 }

@@ -58,6 +58,85 @@ nonisolated struct GoXLRChannelState: Identifiable, Equatable, Sendable {
         peakHold = 0
         isClipping = false
     }
+
+    var volumeScaledDisplayLevel: Double {
+        (displayLevel * volume).clampedToUnitInterval
+    }
+
+    var volumeScaledPeakHold: Double {
+        (peakHold * volume).clampedToUnitInterval
+    }
+
+    var volumeScaledDecibels: Double {
+        guard volume > 0, decibels > -120 else { return -120 }
+        return max(decibels + (20 * log10(volume)), -120)
+    }
+}
+
+nonisolated enum GoXLRChannelSelectionResolver {
+    /// Resolves persisted widget selections against the Agent's current channel IDs.
+    /// GoXLR/Agent versions have used slightly different IDs for the same physical
+    /// fader, so display names and a small set of stable aliases are also accepted.
+    static func resolve(
+        selectedIDs: [String],
+        from channels: [GoXLRChannelState]
+    ) -> [GoXLRChannelState] {
+        var usedChannelIDs: Set<String> = []
+
+        return selectedIDs.map { selectedID in
+            let selectedKey = canonicalKey(selectedID)
+            if let channel = channels.first(where: {
+                !usedChannelIDs.contains(normalized($0.id))
+                    && (canonicalKey($0.id) == selectedKey || canonicalKey($0.displayName) == selectedKey)
+            }) {
+                usedChannelIDs.insert(normalized(channel.id))
+                return channel
+            }
+
+            var placeholder = GoXLRChannelState(
+                control: WindowsGoXLRChannelState(
+                    id: selectedID,
+                    name: displayName(for: selectedID),
+                    level: 0,
+                    isMuted: false
+                )
+            )
+            placeholder.isAvailable = false
+            return placeholder
+        }
+    }
+
+    private static func canonicalKey(_ value: String) -> String {
+        let key = normalized(value)
+        return switch key {
+        case "mic", "microphone", "micinput", "inputmic": "mic"
+        case "chat", "chatmic", "voicechat": "chat"
+        case "music", "musicplayer": "music"
+        case "system", "systemaudio": "system"
+        case "game", "gameaudio": "game"
+        case "line", "linein", "lineinput": "line"
+        default: key
+        }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.lowercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
+    private static func displayName(for id: String) -> String {
+        return switch canonicalKey(id) {
+        case "mic": "Mic"
+        case "chat": "Chat"
+        case "music": "Music"
+        case "system": "System"
+        case "game": "Game"
+        case "line": "Line In"
+        default: id.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
 }
 
 nonisolated enum AudioMeterConnectionState: Equatable, Sendable {

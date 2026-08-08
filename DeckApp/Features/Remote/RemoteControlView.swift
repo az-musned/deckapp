@@ -1,8 +1,14 @@
 import SwiftUI
 import UIKit
 
+enum RemoteTarget: String {
+    case pc
+    case tv
+}
+
 struct RemoteControlView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("remote.target.v1") private var target = RemoteTarget.pc
     @State private var showSettings = false
     @State private var showClipboardActions = false
     @State private var showFullScreenTouchpad = false
@@ -14,23 +20,14 @@ struct RemoteControlView: View {
             let compact = proxy.size.width < 720
 
             VStack(spacing: DesignToken.Spacing.medium) {
-                header
-                modeSelector
-                shortcutStrip
+                targetSwitcher
 
-                Group {
-                    switch remote.selectedMode {
-                    case .touchpad:
-                        touchpadMode(compact: compact)
-                    case .keyboard:
-                        RemoteKeyboardPanel(remote: remote)
-                    case .media:
-                        RemoteMediaPanel(remote: remote)
-                    case .shortcuts:
-                        RemoteShortcutsPanel(remote: remote)
-                    }
+                switch target {
+                case .pc:
+                    pcContent(compact: compact)
+                case .tv:
+                    LGTVRemoteView(embedded: true)
                 }
-                .opacity(remote.selectedMode == .media || remote.connectionState.acceptsInput ? 1 : 0.52)
             }
             .padding(compact ? DesignToken.Spacing.medium : DesignToken.Spacing.large)
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -48,7 +45,42 @@ struct RemoteControlView: View {
         } message: {
             Text("The clipboard is read only after you choose an action. Its contents are not stored or logged.")
         }
-        .task { await remote.refreshAgentSecurityState() }
+        .task {
+            await remote.refreshAgentSecurityState()
+            if remote.pairingState.isPaired, remote.connectionState == .disconnected {
+                await remote.connect()
+            }
+        }
+    }
+
+    private var targetSwitcher: some View {
+        Picker("Remote target", selection: $target) {
+            Label("PC", systemImage: "desktopcomputer").tag(RemoteTarget.pc)
+            Label("TV", systemImage: "tv").tag(RemoteTarget.tv)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private func pcContent(compact: Bool) -> some View {
+        VStack(spacing: DesignToken.Spacing.medium) {
+            header
+            modeSelector
+            shortcutStrip
+
+            Group {
+                switch remote.selectedMode {
+                case .touchpad:
+                    touchpadMode(compact: compact)
+                case .keyboard:
+                    RemoteKeyboardPanel(remote: remote)
+                case .media:
+                    RemoteMediaPanel(remote: remote)
+                case .shortcuts:
+                    RemoteShortcutsPanel(remote: remote)
+                }
+            }
+            .opacity(remote.selectedMode == .media || remote.connectionState.acceptsInput ? 1 : 0.52)
+        }
     }
 
     private var header: some View {
@@ -746,17 +778,32 @@ private struct FullScreenRemoteTouchpad: View {
     let remote: RemoteInputController
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             AppBackground()
             RemoteTouchpadPanel(remote: remote)
-                .padding()
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .frame(width: 42, height: 42)
+                .padding(DesignToken.Spacing.medium)
+                .padding(.top, 48)
+                .zIndex(0)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button {
+                dismiss()
+            } label: {
+                Label("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, DesignToken.Spacing.medium)
+                    .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
-            .glassSurface(.elevated, cornerRadius: 999)
-            .padding()
+            .glassSurface(
+                .interactive,
+                cornerRadius: 999,
+                tint: DesignToken.Color.accent.opacity(0.12),
+                interactive: true
+            )
+            .padding(DesignToken.Spacing.medium)
+            .zIndex(100)
+            .accessibilityHint("Returns to the Remote screen")
         }
     }
 }
@@ -782,6 +829,12 @@ struct RemoteKeyButton: View {
 }
 
 enum RemoteHaptics {
+    static func heavy() {
+        let generator = UIImpactFeedbackGenerator(style: .heavy)
+        generator.prepare()
+        generator.impactOccurred(intensity: 1)
+    }
+
     static func click() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }

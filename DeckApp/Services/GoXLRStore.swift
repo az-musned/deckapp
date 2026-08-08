@@ -17,15 +17,30 @@ final class GoXLRStore {
     @ObservationIgnored private let apiService: any GoXLRAudioAPIServing
     @ObservationIgnored private var consumers = 0
     @ObservationIgnored private var appIsActive = true
+    @ObservationIgnored private var interactionUIIsPresented = false
     @ObservationIgnored private var staleTask: Task<Void, Never>?
     @ObservationIgnored private var controlRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var lastMessageDate: Date?
     @ObservationIgnored private var activeVolumeInteractions: Set<String> = []
     @ObservationIgnored private var pendingVolumeTargets: [String: PendingVolumeTarget] = [:]
+    @ObservationIgnored private var pendingMuteTargets: [String: PendingMuteTarget] = [:]
+    @ObservationIgnored private var desiredMuteTargets: [String: DesiredMuteTarget] = [:]
+    @ObservationIgnored private var muteCommandTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private let meterUpdateCoalescer = GoXLRMeterUpdateCoalescer()
 
     private struct PendingVolumeTarget {
         let value: Double
         let expiresAt: Date
+    }
+
+    private struct PendingMuteTarget {
+        let value: Bool
+        let expiresAt: Date
+    }
+
+    private struct DesiredMuteTarget {
+        let channelID: String
+        let value: Bool
     }
 
     init(
@@ -46,6 +61,7 @@ final class GoXLRStore {
             if old[key] == nil { old[key] = channel }
         }
         var pending = pendingVolumeTargets
+        var pendingMutes = pendingMuteTargets
         var seenControlIDs: Set<String> = []
         channels = controls.compactMap { control in
             let key = control.id.lowercased()
@@ -60,7 +76,17 @@ final class GoXLRStore {
             } else if !activeVolumeInteractions.contains(key) {
                 merged.volume = control.level.clampedMeterValue
             }
-            merged.isMuted = control.isMuted
+            if let target = pendingMutes[key] {
+                if control.isMuted == target.value || target.expiresAt <= now {
+                    merged.isMuted = control.isMuted
+                    pendingMutes.removeValue(forKey: key)
+                } else {
+                    // Keep the immediate UI response while waiting for confirmed Agent state.
+                    merged.isMuted = target.value
+                }
+            } else {
+                merged.isMuted = control.isMuted
+            }
             if let mapping = mappings.first(where: { $0.id.caseInsensitiveCompare(control.id) == .orderedSame }) {
                 merged.endpointID = mapping.endpointId
                 merged.endpointName = mapping.endpointName
@@ -69,6 +95,7 @@ final class GoXLRStore {
             return merged
         }
         pendingVolumeTargets = pending
+        pendingMuteTargets = pendingMutes
     }
 
     func channel(for id: String) -> GoXLRChannelState? {
@@ -104,7 +131,18 @@ final class GoXLRStore {
     }
 
     func setMuted(channelId: String, isMuted: Bool) async {
-        await controller?.setGoXLRMuted(id: channelId, muted: isMuted)
+        let key = channelId.lowercased()
+        guard let index = channels.firstIndex(where: { $0.id.caseInsensitiveCompare(channelId) == .orderedSame }) else { return }
+        channels[index].isMuted = isMuted
+        pendingMuteTargets[key] = PendingMuteTarget(
+            value: isMuted,
+            expiresAt: .now.addingTimeInterval(2)
+        )
+        desiredMuteTargets[key] = DesiredMuteTarget(channelID: channelId, value: isMuted)
+        guard muteCommandTasks[key] == nil else { return }
+        muteCommandTasks[key] = Task { [weak self] in
+            await self?.runMuteCommandLoop(key: key)
+        }
     }
 
     func toggleMute(channelId: String) async {
@@ -114,7 +152,7 @@ final class GoXLRStore {
 
     func startMetering() async {
         consumers += 1
-        guard consumers == 1, appIsActive else { return }
+        guard consumers == 1, appIsActive, !interactionUIIsPresented else { return }
         await controller?.refreshGoXLRControlState()
         await connectMetering()
     }
@@ -126,7 +164,7 @@ final class GoXLRStore {
     }
 
     func reconnectMetering() async {
-        guard consumers > 0, appIsActive else { return }
+        guard consumers > 0, appIsActive, !interactionUIIsPresented else { return }
         await connectMetering()
     }
 
@@ -136,15 +174,28 @@ final class GoXLRStore {
 
     func agentConfigurationChanged() async {
         await stopTransport()
-        if consumers > 0, appIsActive { await connectMetering() }
+        if consumers > 0, appIsActive, !interactionUIIsPresented { await connectMetering() }
     }
 
     func setAppActive(_ active: Bool) async {
         appIsActive = active
-        if active, consumers > 0 {
+        if active, consumers > 0, !interactionUIIsPresented {
             await connectMetering()
         } else if !active {
             await stopTransport()
+        }
+    }
+
+    /// Pauses high-frequency meter and capability polling while a text-heavy editor
+    /// is covering the dashboard, then restores it without changing consumer counts.
+    func setInteractionUIIsPresented(_ presented: Bool) async {
+        guard interactionUIIsPresented != presented else { return }
+        interactionUIIsPresented = presented
+        if presented {
+            await stopTransport()
+        } else if consumers > 0, appIsActive {
+            await controller?.refreshGoXLRControlState()
+            await connectMetering()
         }
     }
 
@@ -196,6 +247,7 @@ final class GoXLRStore {
     }
 
     private func connectMetering() async {
+        guard !interactionUIIsPresented else { return }
         guard let configuration = controller?.goXLRAudioConfiguration else {
             meterConnectionState = .failed("Pair and configure the Windows Agent first.")
             return
@@ -204,11 +256,17 @@ final class GoXLRStore {
         startControlRefresh()
         lastMessageDate = nil
         meterStreamIsStale = true
+        let meterUpdateCoalescer = meterUpdateCoalescer
+        let deliverMeterUpdate: @MainActor @Sendable (AudioMetersMessage) -> Void = { [weak self] latest in
+            self?.apply(latest)
+        }
         await meterService.start(
             addresses: configuration.addresses,
             credential: configuration.credential,
-            message: { [weak self] message in
-                Task { @MainActor in self?.apply(message) }
+            message: { [meterUpdateCoalescer, deliverMeterUpdate] message in
+                Task {
+                    await meterUpdateCoalescer.submit(message, delivery: deliverMeterUpdate)
+                }
             },
             state: { [weak self] state in
                 Task { @MainActor in self?.meterConnectionState = state }
@@ -230,6 +288,7 @@ final class GoXLRStore {
         controlRefreshTask = nil
         activeVolumeInteractions.removeAll()
         pendingVolumeTargets.removeAll()
+        pendingMuteTargets.removeAll()
         await meterService.stop()
         meterConnectionState = .disconnected
         meterStreamIsStale = true
@@ -274,6 +333,15 @@ final class GoXLRStore {
         }
     }
 
+    private func runMuteCommandLoop(key: String) async {
+        while !Task.isCancelled, let target = desiredMuteTargets[key] {
+            await controller?.setGoXLRMuted(id: target.channelID, muted: target.value)
+            guard desiredMuteTargets[key]?.value == target.value else { continue }
+            desiredMuteTargets.removeValue(forKey: key)
+        }
+        muteCommandTasks[key] = nil
+    }
+
 #if DEBUG
     func loadPreviewChannels() {
         let controls = [
@@ -294,6 +362,26 @@ final class GoXLRStore {
         meterConnectionState = .disconnected
     }
 #endif
+}
+
+private actor GoXLRMeterUpdateCoalescer {
+    private var latest: AudioMetersMessage?
+    private var deliveryScheduled = false
+
+    /// Keeps only the newest meter frame and publishes at most about 30 times per second.
+    func submit(
+        _ message: AudioMetersMessage,
+        delivery: @escaping @MainActor @Sendable (AudioMetersMessage) -> Void
+    ) async {
+        latest = message
+        guard !deliveryScheduled else { return }
+        deliveryScheduled = true
+        try? await Task.sleep(for: .milliseconds(33))
+        let result = latest
+        latest = nil
+        deliveryScheduled = false
+        if let result { await delivery(result) }
+    }
 }
 
 nonisolated struct GoXLRAudioConfiguration: Sendable, Equatable {

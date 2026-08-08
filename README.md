@@ -37,6 +37,7 @@ Open `DeckApp.xcodeproj` in Xcode 26 or newer, select the `DeckApp` scheme, and 
 - Discovered Home Assistant light mapping with state-confirmed power and brightness commands
 - Capability-driven Home Assistant climate, media-player, and smart-switch mapping
 - Optional Home Assistant `remote.*` mapping for LG navigation and capability-gated TV source/media controls
+- Direct local LG webOS discovery, per-TV pairing, Keychain client keys, live state, adaptive remote, dashboard widgets, and Wake-on-LAN power-on
 - Home Assistant-backed PC online sensor, Wake-on-LAN, timeout, and queued Launch Game workflow
 - Home Assistant script routing for Launch Game/Sleep PC and sanitized integration-health diagnostics
 - Adaptive Home Assistant Scenes screen with favorites and observable orchestration progress
@@ -45,6 +46,6 @@ Unmapped device widgets are intentionally labeled `MOCK`. Mapped light, climate,
 
 The Windows project and PC-side setup notes are in [WindowsAgent](WindowsAgent/README.md).
 
-See [the architecture](docs/architecture.md), [the product specification](docs/product-spec.md), and [GoXLR live audio meters](docs/goxlr-live-meters.md) for details.
+See [the architecture](docs/architecture.md), [the product specification](docs/product-spec.md), [LG webOS local control](docs/lg-webos.md), and [GoXLR live audio meters](docs/goxlr-live-meters.md) for details.
 
 For PC setup, see [Connecting Bitfocus Companion](docs/companion-setup.md).

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ControlDeckView: View {
     @Environment(AppState.self) private var appState
@@ -8,12 +9,16 @@ struct ControlDeckView: View {
     let compact: Bool
 
     var body: some View {
+        let columnCount = deckColumnCount
+        let denseTiles = columnCount >= 4
+
         VStack(alignment: .leading, spacing: DesignToken.Spacing.medium) {
             HStack {
                 Label("Control Deck", systemImage: "square.grid.2x2.fill")
                     .font(.headline)
                 Spacer()
                 Button {
+                    RemoteHaptics.heavy()
                     showEditor = true
                 } label: {
                     Label("Customize", systemImage: "slider.horizontal.3")
@@ -25,14 +30,18 @@ struct ControlDeckView: View {
             }
 
             LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: DesignToken.Spacing.small), count: 2),
+                columns: Array(
+                    repeating: GridItem(.flexible(minimum: 0), spacing: DesignToken.Spacing.small),
+                    count: columnCount
+                ),
                 spacing: DesignToken.Spacing.small
             ) {
                 ForEach(appState.controlDeckItems) { item in
-                    control(for: item)
+                    control(for: item, dense: denseTiles)
                 }
 
                 Button {
+                    RemoteHaptics.heavy()
                     showEditor = true
                 } label: {
                     VStack(spacing: DesignToken.Spacing.xSmall) {
@@ -40,9 +49,11 @@ struct ControlDeckView: View {
                             .font(.title2)
                         Text("Add Control")
                             .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                     .foregroundStyle(DesignToken.Color.accent)
-                    .frame(maxWidth: .infinity, minHeight: 76)
+                    .frame(maxWidth: .infinity, minHeight: denseTiles ? 90 : 76)
                 }
                 .buttonStyle(.plain)
                 .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.08), interactive: true)
@@ -50,6 +61,11 @@ struct ControlDeckView: View {
         }
         .sheet(isPresented: $showEditor) {
             ControlDeckEditorView()
+        }
+        .onChange(of: showEditor) { _, presented in
+            Task {
+                await appState.remoteInput.goXLR.setInteractionUIIsPresented(presented)
+            }
         }
         .sheet(item: $presentedFolder) { folder in
             ControlDeckFolderView(folderID: folder.id)
@@ -61,6 +77,7 @@ struct ControlDeckView: View {
         ) {
             if let item = itemAwaitingConfirmation {
                 Button(item.title, role: .destructive) {
+                    RemoteHaptics.heavy()
                     Task { await appState.performControlDeckAction(item) }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -71,23 +88,30 @@ struct ControlDeckView: View {
     }
 
     @ViewBuilder
-    private func control(for item: ControlDeckItem) -> some View {
+    private func control(for item: ControlDeckItem, dense: Bool) -> some View {
         switch item.kind {
         case .companionButton:
-            ControlDeckActionTile(item: item) {
+            ControlDeckActionTile(item: item, dense: dense) {
                 run(item)
             }
         case .folder:
-            ControlDeckActionTile(item: item, trailingSymbol: "chevron.right") {
+            ControlDeckActionTile(item: item, trailingSymbol: "chevron.right", dense: dense) {
                 presentedFolder = item
             }
         case .pcStatusWidget:
-            ControlDeckStatusWidget(item: item)
+            ControlDeckStatusWidget(item: item, dense: dense)
         case .microphoneWidget:
-            ControlDeckMicrophoneWidget(item: item)
+            ControlDeckMicrophoneWidget(item: item, dense: dense)
         case .volumeWidget:
-            ControlDeckVolumeWidget(item: item)
+            ControlDeckVolumeWidget(item: item, dense: dense)
         }
+    }
+
+    private var deckColumnCount: Int {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return 2 }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let orientation = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.interfaceOrientation
+        return orientation?.isLandscape == true ? 8 : 4
     }
 
     private func run(_ item: ControlDeckItem) {
@@ -109,32 +133,50 @@ struct ControlDeckView: View {
 private struct ControlDeckActionTile: View {
     let item: ControlDeckItem
     var trailingSymbol: String?
+    var dense = false
     let action: () -> Void
 
     var body: some View {
         let tint = Color.controlDeckTint(named: item.tintName)
 
-        Button(action: action) {
-            HStack(spacing: DesignToken.Spacing.small) {
-                GlassIcon(symbol: item.symbol, tint: tint, size: 38)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-                    Text(item.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if let trailingSymbol {
-                    Image(systemName: trailingSymbol)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+        Button {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
+            Group {
+                if dense {
+                    VStack(spacing: DesignToken.Spacing.xSmall) {
+                        GlassIcon(symbol: item.symbol, tint: tint, size: 38)
+                        Text(item.title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.75)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 90)
+                } else {
+                    HStack(spacing: DesignToken.Spacing.small) {
+                        GlassIcon(symbol: item.symbol, tint: tint, size: 38)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            Text(item.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        if let trailingSymbol {
+                            Image(systemName: trailingSymbol)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .padding(DesignToken.Spacing.small)
+                    .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
                 }
             }
-            .padding(DesignToken.Spacing.small)
-            .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -145,23 +187,36 @@ private struct ControlDeckActionTile: View {
 private struct ControlDeckStatusWidget: View {
     @Environment(AppState.self) private var appState
     let item: ControlDeckItem
+    let dense: Bool
 
     var body: some View {
         let online = appState.dashboard.pc.isOnline
         let tint = online ? DesignToken.Color.positive : Color.secondary
 
-        HStack(spacing: DesignToken.Spacing.small) {
-            GlassIcon(symbol: item.symbol, tint: tint, size: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).font(.subheadline.weight(.semibold))
-                Label(online ? "Online" : "Offline", systemImage: "circle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(tint)
+        Group {
+            if dense {
+                VStack(spacing: DesignToken.Spacing.xSmall) {
+                    GlassIcon(symbol: item.symbol, tint: tint, size: 38)
+                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(1)
+                    Label(online ? "Online" : "Offline", systemImage: "circle.fill")
+                        .font(.caption2).foregroundStyle(tint)
+                }
+                .frame(maxWidth: .infinity, minHeight: 90)
+            } else {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    GlassIcon(symbol: item.symbol, tint: tint, size: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title).font(.subheadline.weight(.semibold))
+                        Label(online ? "Online" : "Offline", systemImage: "circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(tint)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             }
-            Spacer(minLength: 0)
         }
-        .padding(DesignToken.Spacing.small)
-        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
         .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.12))
     }
 }
@@ -169,23 +224,35 @@ private struct ControlDeckStatusWidget: View {
 private struct ControlDeckMicrophoneWidget: View {
     @Environment(AppState.self) private var appState
     let item: ControlDeckItem
+    let dense: Bool
 
     var body: some View {
         let muted = appState.dashboard.pc.microphoneMuted
         let tint = muted ? DesignToken.Color.destructive : DesignToken.Color.positive
 
-        HStack(spacing: DesignToken.Spacing.small) {
-            GlassIcon(symbol: muted ? "mic.slash.fill" : item.symbol, tint: tint, size: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).font(.subheadline.weight(.semibold))
-                Text(muted ? "Muted" : "Live")
-                    .font(.caption2)
-                    .foregroundStyle(tint)
+        Group {
+            if dense {
+                VStack(spacing: DesignToken.Spacing.xSmall) {
+                    GlassIcon(symbol: muted ? "mic.slash.fill" : item.symbol, tint: tint, size: 38)
+                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(1)
+                    Text(muted ? "Muted" : "Live").font(.caption2).foregroundStyle(tint)
+                }
+                .frame(maxWidth: .infinity, minHeight: 90)
+            } else {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    GlassIcon(symbol: muted ? "mic.slash.fill" : item.symbol, tint: tint, size: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title).font(.subheadline.weight(.semibold))
+                        Text(muted ? "Muted" : "Live")
+                            .font(.caption2)
+                            .foregroundStyle(tint)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             }
-            Spacer(minLength: 0)
         }
-        .padding(DesignToken.Spacing.small)
-        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
         .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.12))
     }
 }
@@ -193,6 +260,7 @@ private struct ControlDeckMicrophoneWidget: View {
 private struct ControlDeckVolumeWidget: View {
     @Environment(AppState.self) private var appState
     let item: ControlDeckItem
+    let dense: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
@@ -212,7 +280,7 @@ private struct ControlDeckVolumeWidget: View {
             .tint(Color.controlDeckTint(named: item.tintName))
         }
         .padding(DesignToken.Spacing.small)
-        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: dense ? 90 : 76, alignment: .leading)
         .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control, tint: Color.controlDeckTint(named: item.tintName).opacity(0.1))
     }
 }
@@ -261,6 +329,7 @@ private struct ControlDeckFolderView: View {
             .confirmationDialog("Run this PC action?", isPresented: confirmationBinding, titleVisibility: .visible) {
                 if let item = itemAwaitingConfirmation {
                     Button(item.title, role: .destructive) {
+                        RemoteHaptics.heavy()
                         Task { await appState.performControlDeckAction(item) }
                     }
                     Button("Cancel", role: .cancel) {}

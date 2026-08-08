@@ -19,6 +19,8 @@ struct SceneOrchestrationView: View {
                         GlassConnectionBadge(route: appState.activeHomeAssistantRoute)
                     }
 
+                    sleepTimerCard
+
                     if let execution = appState.sceneOrchestrationExecution {
                         orchestrationProgress(execution)
                     }
@@ -38,6 +40,86 @@ struct SceneOrchestrationView: View {
             }
             .scrollIndicators(.hidden)
         }
+    }
+
+    private var sleepTimerCard: some View {
+        @Bindable var timer = appState.sleepTimer
+
+        return DashboardCard {
+            HStack {
+                Label("Sleep Timer", systemImage: "moon.zzz.fill").font(.headline)
+                Spacer()
+                if timer.isRunning {
+                    Text(formattedRemaining(timer.remainingSeconds))
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(DesignToken.Color.accent)
+                }
+            }
+
+            if timer.isRunning {
+                Text("Turning off \(timer.selectedTargets.map(\.title).sorted().joined(separator: ", ")) when the timer ends.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button(role: .destructive) {
+                    timer.cancel()
+                } label: {
+                    Label("Cancel Timer", systemImage: "xmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.16), interactive: true)
+            } else {
+                Picker("Duration", selection: $timer.selectedDuration) {
+                    ForEach(SleepTimerDuration.allCases) { duration in
+                        Text(duration.title).tag(duration)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(SleepTimerTarget.allCases) { target in
+                        sleepTimerTargetToggle(target, timer: timer)
+                    }
+                }
+
+                Button {
+                    timer.start()
+                } label: {
+                    Label("Start Sleep Timer", systemImage: "play.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.18), interactive: true)
+                .disabled(timer.selectedTargets.isEmpty)
+
+                if let message = timer.lastCompletionMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func sleepTimerTargetToggle(_ target: SleepTimerTarget, timer: SleepTimerController) -> some View {
+        let isSelected = timer.selectedTargets.contains(target)
+        return Button {
+            if isSelected { timer.selectedTargets.remove(target) } else { timer.selectedTargets.insert(target) }
+        } label: {
+            Label(target.title, systemImage: target.symbol)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? DesignToken.Color.accent : .primary)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: isSelected ? DesignToken.Color.accent.opacity(0.22) : nil, interactive: true)
+    }
+
+    private func formattedRemaining(_ seconds: Int) -> String {
+        String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
     private func sceneCard(_ action: HomeAssistantSceneAction) -> some View {

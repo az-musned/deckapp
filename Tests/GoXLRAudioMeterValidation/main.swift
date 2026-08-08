@@ -53,6 +53,33 @@ struct GoXLRAudioMeterValidation {
         GoXLRChannelStateReducer.decay(&channels, elapsed: 5)
         precondition(channels[0].displayLevel == 0 && channels[0].peakHold == 0)
 
+        let selectableChannels = [
+            GoXLRChannelState(control: WindowsGoXLRChannelState(id: "microphone", name: "Microphone", level: 0.4, isMuted: false)),
+            GoXLRChannelState(control: WindowsGoXLRChannelState(id: "chatMic", name: "Chat", level: 0.5, isMuted: false)),
+            GoXLRChannelState(control: WindowsGoXLRChannelState(id: "music", name: "Music", level: 0.6, isMuted: false))
+        ]
+        let resolved = GoXLRChannelSelectionResolver.resolve(
+            selectedIDs: ["mic", "chat", "music", "system"],
+            from: selectableChannels
+        )
+        precondition(resolved.map(\.displayName) == ["Microphone", "Chat", "Music", "System"])
+        precondition(resolved.map(\.id) == ["microphone", "chatMic", "music", "system"])
+        precondition(resolved.last?.isAvailable == false)
+
+        var scaledChannel = GoXLRChannelState(
+            control: WindowsGoXLRChannelState(id: "music", name: "Music", level: 0.5, isMuted: false)
+        )
+        scaledChannel.displayLevel = 0.8
+        scaledChannel.peakHold = 1
+        scaledChannel.decibels = -6
+        precondition(abs(scaledChannel.volumeScaledDisplayLevel - 0.4) < 0.0001)
+        precondition(abs(scaledChannel.volumeScaledPeakHold - 0.5) < 0.0001)
+        precondition(abs(scaledChannel.volumeScaledDecibels - -12.0206) < 0.001)
+        scaledChannel.volume = 0
+        precondition(scaledChannel.volumeScaledDisplayLevel == 0)
+        precondition(scaledChannel.volumeScaledPeakHold == 0)
+        precondition(scaledChannel.volumeScaledDecibels == -120)
+
         let mappingData = try JSONEncoder().encode(AudioChannelMappingRequest(endpointId: "render-1"))
         let mappingObject = try JSONSerialization.jsonObject(with: mappingData) as? [String: String]
         precondition(mappingObject?["endpointId"] == "render-1")

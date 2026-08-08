@@ -15,6 +15,23 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("LG webOS TVs") {
+                    NavigationLink {
+                        LGTVDeviceSetupView()
+                    } label: {
+                        LabeledContent {
+                            Text(appState.lgTV.devices.isEmpty ? "Not configured" : "\(appState.lgTV.devices.count) saved")
+                                .foregroundStyle(.secondary)
+                        } label: {
+                            Label("Direct Local TV Control", systemImage: "tv.badge.wifi")
+                        }
+                    }
+                    LabeledContent("Connection", value: appState.lgTV.connectionState.title)
+                    Text("TV control stays on the local network. Pairing keys are stored per TV in Keychain, and live TV state is never persisted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Home Assistant") {
                     TextField("Local URL", text: Binding(get: { appState.homeAssistantConfiguration.localURL }, set: { appState.homeAssistantConfiguration.localURL = $0 }))
                         .textInputAutocapitalization(.never)

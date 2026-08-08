@@ -68,6 +68,7 @@ enum WidgetBackendKind: String, Codable, Sendable {
     case govee
     case windowsAgent
     case companion
+    case lgWebOS
 }
 
 struct WidgetBackendReference: Codable, Sendable, Equatable {

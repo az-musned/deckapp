@@ -43,6 +43,8 @@ final class AppState {
     var favoriteSceneActionIDs: Set<String>
     var sceneOrchestrationExecution: SceneOrchestrationExecution?
     let remoteInput: RemoteInputController
+    let lgTV: LGTVStore
+    let sleepTimer = SleepTimerController()
 
     let dashboardService: any DashboardService
     let commandService: any CommandService
@@ -68,6 +70,7 @@ final class AppState {
         companionSettings: CompanionSettingsStore = CompanionSettingsStore(),
         goveeService: any GoveeServing = GoveeClient(),
         remoteInput: RemoteInputController = RemoteInputController(),
+        lgTV: LGTVStore = LGTVStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient()
     ) {
         self.dashboardService = dashboardService
@@ -76,6 +79,7 @@ final class AppState {
         self.companionSettings = companionSettings
         self.goveeService = goveeService
         self.remoteInput = remoteInput
+        self.lgTV = lgTV
         self.homeAssistantService = homeAssistantService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
@@ -106,14 +110,19 @@ final class AppState {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-showRemote") {
             selectedSection = .remote
+        } else if ProcessInfo.processInfo.arguments.contains("-showTV") {
+            selectedSection = .remote
+            UserDefaults.standard.set(RemoteTarget.tv.rawValue, forKey: "remote.target.v1")
         } else if ProcessInfo.processInfo.arguments.contains("-showScenes") {
             selectedSection = .scenes
         }
         #endif
+        sleepTimer.attach(appState: self)
     }
 
     func refresh() async {
         dashboard = await dashboardService.dashboard()
+        await connectCompanionIfConfigured()
         if !goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await saveAndDiscoverGovee()
         }
@@ -483,8 +492,10 @@ final class AppState {
     func startNetworkMonitoring() {
         networkPathObserver.start { [weak self] isReachable in
             guard let self else { return }
+            self.lgTV.networkPathChanged(isReachable: isReachable)
             if isReachable {
                 self.scheduleHomeAssistantReconnect()
+                Task { await self.connectCompanionIfConfigured() }
             } else {
                 self.reconnectTask?.cancel()
                 self.homeAssistantWebSocketState = .disconnected
@@ -503,6 +514,19 @@ final class AppState {
         }
         await callMappedLightService(
             service: "toggle",
+            data: ["entity_id": .string(homeAssistantLightEntityID)],
+            label: "Light power"
+        )
+    }
+
+    func turnOffRoomLight() async {
+        guard !homeAssistantLightEntityID.isEmpty else {
+            if mockRoomControl.light.isOn { await toggleMockLight() }
+            return
+        }
+        guard mockRoomControl.light.isOn else { return }
+        await callMappedLightService(
+            service: "turn_off",
             data: ["entity_id": .string(homeAssistantLightEntityID)],
             label: "Light power"
         )
@@ -944,6 +968,11 @@ final class AppState {
     private func configureMappedWidget(kind: RoomWidgetKind, entityID: String) {
         guard let index = roomControlTemplate.widgets.firstIndex(where: { $0.kind == kind }) else { return }
         if entityID.isEmpty {
+            // An empty Home Assistant mapping only means that a previously mapped
+            // HA widget should return to its default. Direct integrations (such as
+            // LG webOS) are persisted in the dashboard layout and must survive app
+            // foregrounding and relaunches.
+            guard roomControlTemplate.widgets[index].backend.backend == .homeAssistant else { return }
             let fallback = RoomControlTemplate.roomControl.widgets.first { $0.kind == kind }
             if let fallback {
                 roomControlTemplate.widgets[index].backend = fallback.backend
@@ -1203,6 +1232,7 @@ final class AppState {
     }
 
     func testCompanionConnection() async {
+        guard companionStatus != .testing else { return }
         companionStatus = .testing
         companionButtonTestStatus = .idle
 
@@ -1217,6 +1247,14 @@ final class AppState {
             companionStatus = .failed(error.localizedDescription)
             updateCompanionConnection(route: .offline, health: .unavailable)
         }
+    }
+
+    func connectCompanionIfConfigured() async {
+        guard !companionAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            companionStatus = .notConfigured
+            return
+        }
+        await testCompanionConnection()
     }
 
     func pressCompanionTestButton() async {

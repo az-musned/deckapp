@@ -160,16 +160,16 @@ struct GoXLRMixerView: View {
                 .lineLimit(2)
                 .frame(height: 30, alignment: .top)
             AudioLevelMeterView(
-                level: channel.displayLevel,
-                peakHold: channel.peakHold,
+                level: channel.volumeScaledDisplayLevel,
+                peakHold: channel.volumeScaledPeakHold,
                 isClipping: channel.isClipping,
                 isAvailable: channel.isAvailable,
                 isStale: store.meterStreamIsStale,
-                decibels: channel.decibels,
+                decibels: channel.volumeScaledDecibels,
                 channelName: channel.displayName
             )
             .frame(width: 34, height: 180)
-            Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
+            Text(channel.volumeScaledDecibels > -120 ? "\(channel.volumeScaledDecibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             Slider(value: volumeBinding(channel), in: 0...1) { editing in

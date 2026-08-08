@@ -16,7 +16,11 @@ struct RoomControlWidgetView: View {
         case .climate:
             MockClimateWidget(definition: definition, compact: compact)
         case .television:
-            MockTelevisionWidget(definition: definition, compact: compact)
+            if definition.backend.backend == .lgWebOS {
+                LGTVWidget(definition: definition, compact: compact)
+            } else {
+                MockTelevisionWidget(definition: definition, compact: compact)
+            }
         case .pcPower:
             MockPCPowerWidget(definition: definition)
         case .audioMixer:
@@ -40,6 +44,7 @@ private struct RemoteInputLauncherWidget: View {
                 Text(appState.remoteInput.connectionState.title)
                     .font(.title3.bold())
                 Button {
+                    RemoteHaptics.heavy()
                     appState.selectedSection = .remote
                 } label: {
                     Label("Open", systemImage: "arrow.up.forward.app.fill")
@@ -60,6 +65,7 @@ private struct RemoteInputLauncherWidget: View {
                     }
                     Spacer()
                     Button {
+                        RemoteHaptics.heavy()
                         appState.selectedSection = .remote
                     } label: {
                         Label("Open Remote", systemImage: "arrow.up.forward.app.fill")
@@ -88,6 +94,7 @@ private struct CompanionActionsWidget: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button {
+                    RemoteHaptics.heavy()
                     showControlDeck = true
                 } label: {
                     Label("Open", systemImage: "square.grid.2x2.fill")
@@ -182,6 +189,7 @@ private struct WidgetHeader: View {
         case .govee: "GOVEE"
         case .windowsAgent: "AGENT"
         case .companion: "COMPANION"
+        case .lgWebOS: "LG TV"
         case .mock: "MOCK"
         }
     }
@@ -257,6 +265,7 @@ private struct GoveeLightWidget: View {
                 }
                 Spacer()
                 Button {
+                    RemoteHaptics.heavy()
                     let value = powerValue(capability, turnOn: !isPowerOn(device, capability))
                     Task { await appState.setGoveeCapability(deviceID: device.id, capabilityID: capability.id, value: value) }
                 } label: {
@@ -282,6 +291,7 @@ private struct GoveeLightWidget: View {
                 HStack(spacing: DesignToken.Spacing.small) {
                     ForEach(colorPresets, id: \.0) { preset in
                         Button {
+                            RemoteHaptics.heavy()
                             Task {
                                 await appState.setGoveeCapability(
                                     deviceID: device.id,
@@ -307,6 +317,7 @@ private struct GoveeLightWidget: View {
                 Menu {
                     ForEach(options) { option in
                         Button(option.name) {
+                            RemoteHaptics.heavy()
                             Task {
                                 await appState.setGoveeCapability(
                                     deviceID: device.id,
@@ -395,6 +406,7 @@ private struct MockLightWidget: View {
                     .font(.title3.bold())
                 Spacer()
                 Button {
+                    RemoteHaptics.heavy()
                     Task { await appState.toggleRoomLightControl() }
                 } label: {
                     Image(systemName: "power")
@@ -510,7 +522,10 @@ private struct MockClimateWidget: View {
     }
 
     private func temperatureButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
             Image(systemName: symbol)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, DesignToken.Spacing.small)
@@ -542,6 +557,7 @@ private struct MockClimateWidget: View {
         Menu {
             ForEach(options, id: \.self) { option in
                 Button(display(option)) {
+                    RemoteHaptics.heavy()
                     set(option)
                     Task { await appState.setClimateOption(capability, value: option) }
                 }
@@ -602,6 +618,7 @@ private struct MockTelevisionWidget: View {
                 Spacer()
                 if supports(.power) {
                     Button {
+                        RemoteHaptics.heavy()
                         Task { await appState.toggleTelevisionControl() }
                     } label: {
                         Image(systemName: "power").frame(width: 42, height: 42)
@@ -614,7 +631,10 @@ private struct MockTelevisionWidget: View {
             if supports(.sourceSelection), !sourceOptions.isEmpty {
                 Menu {
                     ForEach(sourceOptions, id: \.self) { source in
-                        Button(source) { Task { await appState.selectTelevisionSource(source) } }
+                        Button(source) {
+                            RemoteHaptics.heavy()
+                            Task { await appState.selectTelevisionSource(source) }
+                        }
                     }
                 } label: {
                     LabeledContent("Source") {
@@ -704,7 +724,10 @@ private struct DirectionalRemoteControl: View {
     }
 
     private func remoteButton(_ symbol: String, command: String) -> some View {
-        Button { send(command) } label: {
+        Button {
+            RemoteHaptics.heavy()
+            send(command)
+        } label: {
             Image(systemName: symbol)
                 .frame(width: 42, height: 34)
         }
@@ -740,6 +763,7 @@ private struct MockPCPowerWidget: View {
             }
 
             Button {
+                RemoteHaptics.heavy()
                 Task { await appState.startPCControl() }
             } label: {
                 Label("Turn On and Start PC", systemImage: "power")
@@ -813,6 +837,7 @@ private struct LiveGoXLRWidget: View {
                         .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
                         Spacer()
                         Button("Map Meters", systemImage: "point.3.connected.trianglepath.dotted") {
+                            RemoteHaptics.heavy()
                             showingMappings = true
                         }
                         .buttonStyle(.bordered)
@@ -857,9 +882,10 @@ private struct LiveGoXLRWidget: View {
 
     private var visibleChannels: [GoXLRChannelState] {
         let selectedIDs = definition.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
-        let selected = selectedIDs.compactMap { selectedID in
-            meterStore.channels.first { $0.id.caseInsensitiveCompare(selectedID) == .orderedSame }
-        }
+        let selected = GoXLRChannelSelectionResolver.resolve(
+            selectedIDs: selectedIDs,
+            from: meterStore.channels
+        )
         return definition.size.presentationDensity == .compact ? Array(selected.prefix(4)) : selected
     }
 
@@ -898,12 +924,12 @@ private struct LiveGoXLRWidget: View {
             ForEach(visibleChannels) { channel in
                 VStack(spacing: 3) {
                     AudioLevelMeterView(
-                        level: channel.displayLevel,
-                        peakHold: channel.peakHold,
+                        level: channel.volumeScaledDisplayLevel,
+                        peakHold: channel.volumeScaledPeakHold,
                         isClipping: channel.isClipping,
                         isAvailable: channel.isAvailable,
                         isStale: meterStore.meterStreamIsStale,
-                        decibels: channel.decibels,
+                        decibels: channel.volumeScaledDecibels,
                         channelName: channel.displayName
                     )
                     .frame(width: 18, height: 52)
@@ -928,6 +954,8 @@ private struct LiveGoXLRVerticalFader: View {
     @State private var draftLevel: Double
     @State private var isInteracting = false
 
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
     init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color) {
         self.store = store
         self.channel = channel
@@ -944,15 +972,15 @@ private struct LiveGoXLRVerticalFader: View {
 
             HStack(spacing: 6) {
                 AudioLevelMeterView(
-                    level: channel.displayLevel,
-                    peakHold: channel.peakHold,
+                    level: channel.volumeScaledDisplayLevel,
+                    peakHold: channel.volumeScaledPeakHold,
                     isClipping: channel.isClipping,
                     isAvailable: channel.isAvailable,
                     isStale: store.meterStreamIsStale,
-                    decibels: channel.decibels,
+                    decibels: channel.volumeScaledDecibels,
                     channelName: channel.displayName
                 )
-                .frame(width: 10, height: 92)
+                .frame(width: isPad ? 12 : 10, height: isPad ? 116 : 92)
 
                 GoXLRVerticalSlider(
                     value: Binding(
@@ -971,21 +999,32 @@ private struct LiveGoXLRVerticalFader: View {
                         Task { await store.commitVolumeInteraction(channelId: channel.id, value: draftLevel) }
                     }
                 )
-                .frame(width: 28, height: 96)
-                .disabled(!store.controlsAreAvailable)
+                .frame(width: isPad ? 32 : 28, height: isPad ? 122 : 96)
+                .disabled(!store.controlsAreAvailable || store.channel(for: channel.id) == nil)
             }
 
             Button {
+                RemoteHaptics.heavy()
                 Task { await store.toggleMute(channelId: channel.id) }
             } label: {
                 Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.caption)
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : .secondary)
-                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .frame(height: 32)
+                    .frame(maxWidth: .infinity)
+                    .glassSurface(
+                        .interactive,
+                        cornerRadius: 8,
+                        tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.18) : tint.opacity(0.1),
+                        interactive: true
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.plain)
-            .glassSurface(.subtle, cornerRadius: 8, tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.12) : tint.opacity(0.06))
-            .disabled(!store.controlsAreAvailable)
+            .contentShape(Rectangle())
+            .disabled(!store.controlsAreAvailable || store.channel(for: channel.id) == nil)
+            .accessibilityLabel("\(channel.displayName) \(channel.isMuted ? "muted" : "not muted")")
+            .accessibilityHint("Double tap to toggle mute")
         }
         .onChange(of: channel.volume) { _, level in
             if !isInteracting { draftLevel = level }
@@ -1062,6 +1101,8 @@ private struct MockGoXLRWidget: View {
     let definition: RoomWidgetDefinition
     let compact: Bool
 
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
     var body: some View {
         DashboardCard {
             WidgetHeader(
@@ -1117,7 +1158,7 @@ private struct MockGoXLRWidget: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             HStack(spacing: 6) {
-                mockMeter(index: index).frame(width: 10, height: 92)
+                mockMeter(index: index).frame(width: isPad ? 12 : 10, height: isPad ? 116 : 92)
                 GoXLRVerticalSlider(
                     value: Binding(
                         get: { appState.mockRoomControl.goXLR.channels[index].level },
@@ -1128,9 +1169,10 @@ private struct MockGoXLRWidget: View {
                 ) {
                     Task { await appState.confirmMockControl("GoXLR channel level") }
                 }
-                .frame(width: 28, height: 96)
+                .frame(width: isPad ? 32 : 28, height: isPad ? 122 : 96)
             }
             Button {
+                RemoteHaptics.heavy()
                 appState.mockRoomControl.goXLR.channels[index].isMuted.toggle()
                 Task { await appState.confirmMockControl("GoXLR mute") }
             } label: {

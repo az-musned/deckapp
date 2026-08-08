@@ -32,6 +32,7 @@ struct DashboardView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Button {
+                            RemoteHaptics.heavy()
                             showLayoutEditor = true
                         } label: {
                             Label("Edit", systemImage: "slider.horizontal.3")
@@ -253,7 +254,10 @@ private struct SceneButton: View {
     var body: some View {
         let tint = Color.sceneTint(named: scene.tintName)
 
-        Button(action: action) {
+        Button {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
             HStack(spacing: DesignToken.Spacing.small) {
                 GlassIcon(symbol: scene.symbol, tint: tint, size: 38)
                 VStack(alignment: .leading, spacing: 2) {
@@ -321,16 +325,18 @@ private struct MediaCard: View {
 
             HStack {
                 Spacer()
-                Button(action: {}) { Image(systemName: "backward.fill") }
+                Button { RemoteHaptics.heavy() } label: { Image(systemName: "backward.fill") }
                 Spacer()
-                Button(action: {}) {
+                Button {
+                    RemoteHaptics.heavy()
+                } label: {
                     Image(systemName: appState.dashboard.media.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title3)
                         .frame(width: 44, height: 44)
                 }
                 .glassSurface(.interactive, cornerRadius: 999, interactive: true)
                 Spacer()
-                Button(action: {}) { Image(systemName: "forward.fill") }
+                Button { RemoteHaptics.heavy() } label: { Image(systemName: "forward.fill") }
                 Spacer()
             }
             .buttonStyle(.plain)

@@ -8,7 +8,10 @@ struct GlassActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(role: role, action: action) {
+        Button(role: role) {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
             Label(title, systemImage: symbol)
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
