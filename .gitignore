@@ -13,3 +13,7 @@ xcuserdata/
 *.cer
 WindowsAgent/**/appsettings.Development.json
 WindowsAgent/**/appsettings.Local.json
+research/gree-poc/gree_cloud_credentials.json
+research/gree-poc/gree_cloud_device.json
+research/gree-poc/.venv/
+research/gree-poc/__pycache__/
