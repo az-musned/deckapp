@@ -30,8 +30,8 @@ struct RoomControlValidation {
         precondition(!invalidRange.isValid)
 
         let template = RoomControlTemplate.roomControl
-        precondition(template.widgets.count == 8)
-        precondition(template.widgets.map(\.kind) == [.light, .climate, .television, .pcPower, .remoteInputLauncher, .audioMixer, .screenMirror, .companionActions])
+        precondition(template.widgets.count == 9)
+        precondition(template.widgets.map(\.kind) == [.light, .climate, .television, .pcPower, .remoteInputLauncher, .audioMixer, .screenMirror, .screenMirror, .companionActions])
         precondition(template.widgets.last?.backend.backend == .companion)
 
         let climate = template.widgets.first { $0.kind == .climate }!

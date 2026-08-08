@@ -15,9 +15,13 @@ struct ScreenMirrorValidation {
         tracker.reset()
         precondition(tracker.accepts(0), "Sequence zero must be accepted after reconnect.")
 
-        let helloJSON = #"{"type":"screen.hello","width":1920,"height":1080,"fps":15,"format":"mjpeg","protocolVersion":1}"#
+        let helloJSON = #"{"type":"screen.hello","width":1920,"height":1080,"fps":15,"format":"mjpeg","protocolVersion":1,"mode":"mirror"}"#
         let hello = try JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: Data(helloJSON.utf8))
-        precondition(hello.format == "mjpeg" && hello.fps == 15)
+        precondition(hello.format == "mjpeg" && hello.fps == 15 && hello.mode == .mirror)
+
+        let extendHelloJSON = #"{"type":"screen.hello","width":2388,"height":1668,"fps":15,"format":"mjpeg","protocolVersion":1,"mode":"extend"}"#
+        let extendHello = try JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: Data(extendHelloJSON.utf8))
+        precondition(extendHello.mode == .extend)
 
         let jpegBytes = Self.makeSingleColorJpeg(width: 4, height: 4)
         var header = Data(count: 26)

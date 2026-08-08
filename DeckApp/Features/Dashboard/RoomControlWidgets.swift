@@ -89,6 +89,10 @@ private struct ScreenMirrorLauncherWidget: View {
     let definition: RoomWidgetDefinition
 
     private var remote: RemoteInputController { appState.remoteInput }
+    private var mode: ScreenMirrorMode { definition.resolvedScreenMirrorMode }
+    private var store: ScreenMirrorStore { mode == .extend ? remote.extendDisplay : remote.screenMirror }
+    private var tint: Color { mode == .extend ? Color.controlDeckTint(named: "purple") : DesignToken.Color.cyan }
+    private var watchLabel: String { mode == .extend ? "Extend" : "Watch" }
 
     private var statusText: String {
         remote.usesMockAgent ? "Mock Agent" : remote.securityState.screenShareAllowed ? "Ready" : "Disabled on PC"
@@ -116,7 +120,7 @@ private struct ScreenMirrorLauncherWidget: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreenMirror) {
-            FullScreenScreenMirrorView(store: remote.screenMirror)
+            FullScreenScreenMirrorView(store: store)
         }
     }
 
@@ -124,13 +128,13 @@ private struct ScreenMirrorLauncherWidget: View {
         Button {
             showFullScreenMirror = true
         } label: {
-            Label("Watch", systemImage: "tv.and.mediabox.fill")
+            Label(watchLabel, systemImage: definition.symbol)
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, DesignToken.Spacing.medium)
                 .padding(.vertical, DesignToken.Spacing.small)
         }
         .buttonStyle(.plain)
-        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.18), interactive: true)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.18), interactive: true)
     }
 }
 

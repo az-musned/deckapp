@@ -29,9 +29,11 @@ struct RootView: View {
             Task {
                 await appState.remoteInput.goXLR.setAppActive(phase == .active)
                 await appState.remoteInput.screenMirror.setAppActive(phase == .active)
+                await appState.remoteInput.extendDisplay.setAppActive(phase == .active)
                 appState.lgTV.setAppActive(phase == .active)
                 if phase == .active { await appState.connectCompanionIfConfigured() }
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
+                if phase != .active { await appState.greeClimate.deactivate() }
             }
         }
     }
@@ -67,7 +69,7 @@ struct RootView: View {
                 .tabItem { Label("Remote", systemImage: AppSection.remote.symbol) }
                 .tag(AppSection.remote)
 
-            phoneTabSurface { PlaceholderFeatureView(section: .climate) }
+            phoneTabSurface { ClimateView() }
                 .tabItem { Label("Climate", systemImage: AppSection.climate.symbol) }
                 .tag(AppSection.climate)
 
@@ -102,6 +104,8 @@ struct RootView: View {
             SettingsView()
         case .remote:
             RemoteControlView()
+        case .climate:
+            ClimateView()
         case .scenes:
             SceneOrchestrationView()
         default:
