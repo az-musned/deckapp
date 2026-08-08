@@ -11,6 +11,7 @@ public sealed class AgentOptions
     public int PairingCodeLifetimeSeconds { get; init; } = 120;
     public int MaximumPairingAttempts { get; init; } = 5;
     public bool RemoteInputEnabledByDefault { get; init; } = true;
+    public bool ScreenShareEnabledByDefault { get; init; }
     public int MaximumInputClients { get; init; } = 2;
     public CapabilityOptions Capabilities { get; init; } = new();
     public AudioMeterOptions AudioMeters { get; init; } = new();
@@ -100,7 +101,8 @@ public sealed class ScreenStreamOptions
     public int MaxWidth { get; init; } = 1920;
     public int JpegQuality { get; init; } = 70;
     public int MaximumClients { get; init; } = 2;
-    public int MonitorIndex { get; init; }
+    public string? MirrorMonitorDeviceName { get; init; }
+    public string? ExtendMonitorDeviceName { get; init; }
 
     public void Validate()
     {
@@ -112,8 +114,6 @@ public sealed class ScreenStreamOptions
             throw new InvalidOperationException("Agent:ScreenStream:JpegQuality must be between 1 and 100.");
         if (MaximumClients is < 1 or > 4)
             throw new InvalidOperationException("Agent:ScreenStream:MaximumClients must be between 1 and 4.");
-        if (MonitorIndex < 0)
-            throw new InvalidOperationException("Agent:ScreenStream:MonitorIndex must be zero or greater.");
     }
 }
 

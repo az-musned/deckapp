@@ -2,6 +2,11 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
+nonisolated enum ScreenMirrorMode: String, Codable, Sendable {
+    case mirror
+    case extend
+}
+
 nonisolated struct ScreenMirrorHelloMessage: Decodable, Sendable, Equatable {
     let type: String
     let width: Int
@@ -9,6 +14,7 @@ nonisolated struct ScreenMirrorHelloMessage: Decodable, Sendable, Equatable {
     let fps: Int
     let format: String
     let protocolVersion: Int
+    let mode: ScreenMirrorMode
 }
 
 nonisolated enum ScreenMirrorConnectionState: Equatable, Sendable {

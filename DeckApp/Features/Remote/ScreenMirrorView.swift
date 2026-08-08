@@ -10,7 +10,7 @@ struct FullScreenScreenMirrorView: View {
             Color.black.ignoresSafeArea()
 
             if let image = store.latestFrame {
-                ScreenMirrorFrameView(image: image)
+                ScreenMirrorFrameView(image: image, contentsGravity: store.mode == .extend ? .resize : .resizeAspect)
                     .ignoresSafeArea()
             } else {
                 statusOverlay
@@ -61,15 +61,17 @@ struct FullScreenScreenMirrorView: View {
 
 private struct ScreenMirrorFrameView: UIViewRepresentable {
     let image: CGImage
+    let contentsGravity: CALayerContentsGravity
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
-        view.layer.contentsGravity = .resizeAspect
+        view.layer.contentsGravity = contentsGravity
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
+        uiView.layer.contentsGravity = contentsGravity
         uiView.layer.contents = image
     }
 }

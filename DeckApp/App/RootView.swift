@@ -29,6 +29,7 @@ struct RootView: View {
             Task {
                 await appState.remoteInput.goXLR.setAppActive(phase == .active)
                 await appState.remoteInput.screenMirror.setAppActive(phase == .active)
+                await appState.remoteInput.extendDisplay.setAppActive(phase == .active)
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
             }
         }

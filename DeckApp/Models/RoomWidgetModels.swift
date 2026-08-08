@@ -88,6 +88,9 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
     var capabilities: [DeviceCapabilityDescriptor]
     var phoneSize: RoomWidgetSize?
     var padSize: RoomWidgetSize?
+    /// Only meaningful when `kind == .screenMirror`. Defaults to `.mirror` for widgets
+    /// saved before extend mode existed.
+    var screenMirrorMode: ScreenMirrorMode?
 
     init(
         id: UUID = UUID(),
@@ -100,7 +103,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         backend: WidgetBackendReference,
         capabilities: [DeviceCapabilityDescriptor],
         phoneSize: RoomWidgetSize? = nil,
-        padSize: RoomWidgetSize? = nil
+        padSize: RoomWidgetSize? = nil,
+        screenMirrorMode: ScreenMirrorMode? = nil
     ) {
         self.id = id
         self.title = title
@@ -113,7 +117,10 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.phoneSize = phoneSize
         self.padSize = padSize
+        self.screenMirrorMode = screenMirrorMode
     }
+
+    var resolvedScreenMirrorMode: ScreenMirrorMode { screenMirrorMode ?? .mirror }
 
     func resolvedSize(for layoutClass: RoomWidgetLayoutClass) -> RoomWidgetSize {
         switch layoutClass {
@@ -133,7 +140,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
             backend: backend,
             capabilities: capabilities,
             phoneSize: phoneSize,
-            padSize: padSize
+            padSize: padSize,
+            screenMirrorMode: screenMirrorMode
         )
     }
 }
@@ -228,7 +236,20 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 kind: .screenMirror,
                 size: .medium,
                 backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.screen-mirror"),
-                capabilities: MockCapabilities.screenMirror
+                capabilities: MockCapabilities.screenMirror,
+                screenMirrorMode: .mirror
+            ),
+            RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A109")!,
+                title: "Extend Display",
+                subtitle: "Authenticated Windows Agent virtual monitor",
+                symbol: "rectangle.on.rectangle",
+                tintName: "purple",
+                kind: .screenMirror,
+                size: .medium,
+                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.extend-display"),
+                capabilities: MockCapabilities.screenMirror,
+                screenMirrorMode: .extend
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,

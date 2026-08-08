@@ -19,7 +19,8 @@ final class RemoteInputController {
     var capabilitySnapshot: WindowsAgentCapabilitySnapshot?
     var agentCommandExecution: WindowsAgentCommandExecution?
     let goXLR = GoXLRStore()
-    let screenMirror = ScreenMirrorStore()
+    let screenMirror = ScreenMirrorStore(mode: .mirror)
+    let extendDisplay = ScreenMirrorStore(mode: .extend)
     var usesMockAgent = true
     var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
     var windowsAgentLocalAddress = ""
@@ -91,6 +92,7 @@ final class RemoteInputController {
         }
         goXLR.attach(controller: self)
         screenMirror.attach(controller: self)
+        extendDisplay.attach(controller: self)
     }
 
     func savePreferences() {
@@ -129,6 +131,7 @@ final class RemoteInputController {
         await refreshAgentSecurityState()
         await goXLR.agentConfigurationChanged()
         await screenMirror.agentConfigurationChanged()
+        await extendDisplay.agentConfigurationChanged()
     }
 
     private var configuredAgentAddresses: [String] {
@@ -217,6 +220,7 @@ final class RemoteInputController {
         await disconnect()
         await goXLR.agentDidDisconnect()
         await screenMirror.agentDidDisconnect()
+        await extendDisplay.agentDidDisconnect()
         await service.revokePairing()
         try? pairingKeychain.delete(account: pairingCredentialAccount)
         pairingState = .revoked

@@ -4,6 +4,7 @@ protocol ScreenMirrorServing: Sendable {
     func start(
         addresses: [String],
         credential: String,
+        mode: ScreenMirrorMode,
         frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async
@@ -31,6 +32,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
     func start(
         addresses: [String],
         credential: String,
+        mode: ScreenMirrorMode,
         frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async {
@@ -46,6 +48,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                 generation: currentGeneration,
                 addresses: addresses,
                 credential: credential,
+                mode: mode,
                 frame: frame,
                 state: state
             )
@@ -64,6 +67,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         generation: UUID,
         addresses: [String],
         credential: String,
+        mode: ScreenMirrorMode,
         frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async {
@@ -76,6 +80,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                     try await receiveStream(
                         address: address,
                         credential: credential,
+                        mode: mode,
                         generation: generation,
                         frame: frame,
                         state: state
@@ -95,12 +100,17 @@ actor ScreenMirrorClient: ScreenMirrorServing {
     private func receiveStream(
         address: String,
         credential: String,
+        mode: ScreenMirrorMode,
         generation: UUID,
         frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async throws {
         let endpoint = try WindowsAgentEndpoint(address)
-        var request = URLRequest(url: try endpoint.url(path: "/api/v1/screen/mirror/ws", webSocket: true))
+        let baseURL = try endpoint.url(path: "/api/v1/screen/mirror/ws", webSocket: true)
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "mode", value: mode.rawValue)]
+        guard let socketURL = components?.url else { throw WindowsRemoteInputError.disconnected }
+        var request = URLRequest(url: socketURL)
         request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let currentSocket = session.webSocketTask(with: request)

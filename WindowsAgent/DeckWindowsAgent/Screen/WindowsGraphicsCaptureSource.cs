@@ -20,7 +20,7 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
     private readonly object _gate = new();
     private bool _disposed;
 
-    public WindowsGraphicsCaptureSource()
+    public WindowsGraphicsCaptureSource(string? deviceName, ILogger<WindowsGraphicsCaptureSource> logger)
     {
         var featureLevels = new[] { FeatureLevel.Level_11_1, FeatureLevel.Level_11_0 };
         D3D11.D3D11CreateDevice(
@@ -33,7 +33,7 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
 
         _direct3DDevice = CreateDirect3DDeviceFromD3D11Device(_device);
 
-        var monitor = NativeMethods.MonitorFromWindow(IntPtr.Zero, NativeMethods.MonitorDefaultToPrimary);
+        var monitor = ResolveMonitor(deviceName, logger);
         _item = GraphicsCaptureItemInterop.CreateItemForMonitor(monitor);
 
         _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
@@ -105,6 +105,19 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
         }
     }
 
+    private static IntPtr ResolveMonitor(string? deviceName, ILogger<WindowsGraphicsCaptureSource> logger)
+    {
+        if (!string.IsNullOrWhiteSpace(deviceName))
+        {
+            var resolved = MonitorEnumerator.ResolveHandle(deviceName);
+            if (resolved is { } handle) return handle;
+            logger.LogWarning(
+                "Configured monitor {DeviceName} is not currently attached; falling back to the primary monitor.",
+                deviceName);
+        }
+        return NativeMethods.MonitorFromWindow(IntPtr.Zero, NativeMethods.MonitorDefaultToPrimary);
+    }
+
     private static IDirect3DDevice CreateDirect3DDeviceFromD3D11Device(ID3D11Device device)
     {
         using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
@@ -132,43 +145,60 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
         public static extern void CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
     }
 
-    private static class GraphicsCaptureItemInterop
+    private static unsafe class GraphicsCaptureItemInterop
     {
+        private static readonly Guid InteropIid = new("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+
+        // typeof(GraphicsCaptureItem).GUID is a CLR-reflection GUID, not the real ABI interface
+        // IID -- CreateForMonitor needs the actual IGraphicsCaptureItem default-interface IID.
+        private static readonly Guid GraphicsCaptureItemIid = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+
+        // Vtable layout for IGraphicsCaptureItemInterop (derives from IUnknown):
+        // 0 = QueryInterface, 1 = AddRef, 2 = Release, 3 = CreateForWindow, 4 = CreateForMonitor.
+        private const int CreateForMonitorVtableSlot = 4;
+
         public static GraphicsCaptureItem CreateItemForMonitor(IntPtr monitorHandle)
         {
-            var activationFactoryIid = typeof(IGraphicsCaptureItemInterop).GUID;
-            RoGetActivationFactory(
-                "Windows.Graphics.Capture.GraphicsCaptureItem",
-                ref activationFactoryIid,
-                out var factoryPointer);
+            const string className = "Windows.Graphics.Capture.GraphicsCaptureItem";
+            WindowsCreateString(className, className.Length, out var classNameHandle);
             try
             {
-                var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPointer);
-                var itemGuid = typeof(GraphicsCaptureItem).GUID;
-                var itemPointer = interop.CreateForMonitor(monitorHandle, ref itemGuid);
-                return GraphicsCaptureItem.FromAbi(itemPointer) is GraphicsCaptureItem item
-                    ? item
-                    : throw new InvalidOperationException("Failed to create a GraphicsCaptureItem for the target monitor.");
+                var activationFactoryIid = InteropIid;
+                RoGetActivationFactory(classNameHandle, ref activationFactoryIid, out var interopPointer);
+                try
+                {
+                    var itemGuid = GraphicsCaptureItemIid;
+                    var vtable = *(IntPtr**)interopPointer;
+                    var createForMonitor = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, Guid*, IntPtr*, int>)
+                        vtable[CreateForMonitorVtableSlot];
+                    IntPtr itemPointer;
+                    var hr = createForMonitor(interopPointer, monitorHandle, &itemGuid, &itemPointer);
+                    Marshal.ThrowExceptionForHR(hr);
+                    return GraphicsCaptureItem.FromAbi(itemPointer) is GraphicsCaptureItem item
+                        ? item
+                        : throw new InvalidOperationException("Failed to create a GraphicsCaptureItem for the target monitor.");
+                }
+                finally
+                {
+                    Marshal.Release(interopPointer);
+                }
             }
             finally
             {
-                Marshal.Release(factoryPointer);
+                WindowsDeleteString(classNameHandle);
             }
         }
 
         [DllImport("combase.dll", ExactSpelling = true, PreserveSig = false)]
         private static extern void RoGetActivationFactory(
-            [MarshalAs(UnmanagedType.HString)] string activatableClassId,
+            IntPtr activatableClassId,
             ref Guid iid,
             out IntPtr factory);
 
-        [ComImport]
-        [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
-        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IGraphicsCaptureItemInterop
-        {
-            IntPtr CreateForWindow(IntPtr window, ref Guid iid);
-            IntPtr CreateForMonitor(IntPtr monitor, ref Guid iid);
-        }
+        [DllImport("combase.dll", CharSet = CharSet.Unicode, ExactSpelling = true, PreserveSig = false)]
+        private static extern void WindowsCreateString(string sourceString, int length, out IntPtr hstring);
+
+        [DllImport("combase.dll", ExactSpelling = true, PreserveSig = false)]
+        private static extern void WindowsDeleteString(IntPtr hstring);
     }
 }

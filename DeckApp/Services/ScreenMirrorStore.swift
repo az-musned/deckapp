@@ -9,6 +9,8 @@ final class ScreenMirrorStore {
     private(set) var connectionState: ScreenMirrorConnectionState = .disconnected
     private(set) var isStale = true
 
+    let mode: ScreenMirrorMode
+
     @ObservationIgnored private weak var controller: RemoteInputController?
     @ObservationIgnored private let client: any ScreenMirrorServing
     @ObservationIgnored private var consumers = 0
@@ -16,7 +18,8 @@ final class ScreenMirrorStore {
     @ObservationIgnored private var staleTask: Task<Void, Never>?
     @ObservationIgnored private var lastFrameDate: Date?
 
-    init(client: any ScreenMirrorServing = ScreenMirrorClient()) {
+    init(mode: ScreenMirrorMode, client: any ScreenMirrorServing = ScreenMirrorClient()) {
+        self.mode = mode
         self.client = client
     }
 
@@ -65,6 +68,7 @@ final class ScreenMirrorStore {
         await client.start(
             addresses: configuration.addresses,
             credential: configuration.credential,
+            mode: mode,
             frame: { [weak self] frame in
                 Task { @MainActor in self?.apply(frame) }
             },
