@@ -29,6 +29,8 @@ struct RoomControlWidgetView: View {
             CompanionActionsWidget(definition: definition, compact: compact)
         case .remoteInputLauncher:
             RemoteInputLauncherWidget(definition: definition)
+        case .screenMirror:
+            ScreenMirrorLauncherWidget(definition: definition)
         }
     }
 }
@@ -78,6 +80,57 @@ private struct RemoteInputLauncherWidget: View {
                 }
             }
         }
+    }
+}
+
+private struct ScreenMirrorLauncherWidget: View {
+    @Environment(AppState.self) private var appState
+    @State private var showFullScreenMirror = false
+    let definition: RoomWidgetDefinition
+
+    private var remote: RemoteInputController { appState.remoteInput }
+
+    private var statusText: String {
+        remote.usesMockAgent ? "Mock Agent" : remote.securityState.screenShareAllowed ? "Ready" : "Disabled on PC"
+    }
+
+    var body: some View {
+        DashboardCard {
+            if definition.size == .small {
+                WidgetHeader(definition: definition, availability: .available)
+                Text(statusText)
+                    .font(.title3.bold())
+                watchButton
+            } else {
+                HStack(spacing: DesignToken.Spacing.medium) {
+                    GlassIcon(symbol: definition.symbol, tint: Color.controlDeckTint(named: definition.tintName), size: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(definition.title).font(.headline).lineLimit(1)
+                        Text(statusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    watchButton
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showFullScreenMirror) {
+            FullScreenScreenMirrorView(store: remote.screenMirror)
+        }
+    }
+
+    private var watchButton: some View {
+        Button {
+            showFullScreenMirror = true
+        } label: {
+            Label("Watch", systemImage: "tv.and.mediabox.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, DesignToken.Spacing.medium)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.18), interactive: true)
     }
 }
 

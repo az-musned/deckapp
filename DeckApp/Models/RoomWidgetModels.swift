@@ -8,6 +8,7 @@ enum RoomWidgetKind: String, Codable, CaseIterable, Sendable {
     case audioMixer
     case companionActions
     case remoteInputLauncher
+    case screenMirror
 }
 
 enum RoomWidgetSize: String, Codable, CaseIterable, Sendable {
@@ -228,6 +229,17 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 audioMixerChannelIDs: RoomWidgetDefinition.defaultGoXLRChannelIDs
             ),
             RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A108")!,
+                title: "Screen Mirror",
+                subtitle: "Authenticated Windows Agent screen share",
+                symbol: "tv.and.mediabox.fill",
+                tintName: "cyan",
+                kind: .screenMirror,
+                size: .medium,
+                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.screen-mirror"),
+                capabilities: MockCapabilities.screenMirror
+            ),
+            RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,
                 title: "Companion Actions",
                 subtitle: "Existing actions and macros",
@@ -302,5 +314,9 @@ enum MockCapabilities {
         DeviceCapabilityDescriptor(id: "relative_pointer", kind: .directionalRemote, name: "Relative Pointer"),
         DeviceCapabilityDescriptor(id: "keyboard", kind: .action, name: "Keyboard Input"),
         DeviceCapabilityDescriptor(id: "media_keys", kind: .mediaPlayback, name: "Media Keys")
+    ]
+
+    static let screenMirror: [DeviceCapabilityDescriptor] = [
+        DeviceCapabilityDescriptor(id: "screen_watch", kind: .action, name: "Watch PC Screen")
     ]
 }

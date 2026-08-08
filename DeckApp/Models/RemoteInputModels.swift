@@ -426,6 +426,14 @@ nonisolated struct WindowsAgentSecurityState: Codable, Sendable, Equatable {
     let remoteInputAllowed: Bool
     let inputInjectionAvailable: Bool
     let emergencyInputDisabled: Bool
+    let screenShareAllowed: Bool
+
+    init(remoteInputAllowed: Bool, inputInjectionAvailable: Bool, emergencyInputDisabled: Bool, screenShareAllowed: Bool = false) {
+        self.remoteInputAllowed = remoteInputAllowed
+        self.inputInjectionAvailable = inputInjectionAvailable
+        self.emergencyInputDisabled = emergencyInputDisabled
+        self.screenShareAllowed = screenShareAllowed
+    }
 
     var acceptsRemoteInput: Bool {
         remoteInputAllowed && inputInjectionAvailable && !emergencyInputDisabled

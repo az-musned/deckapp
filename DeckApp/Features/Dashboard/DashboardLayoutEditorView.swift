@@ -464,6 +464,7 @@ private extension RoomWidgetKind {
         case .audioMixer: "Audio Mixer"
         case .companionActions: "Companion Actions"
         case .remoteInputLauncher: "PC Remote"
+        case .screenMirror: "Screen Mirror"
         }
     }
 
@@ -476,6 +477,7 @@ private extension RoomWidgetKind {
         case .audioMixer: "Capability-driven audio channel levels and mute."
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
+        case .screenMirror: "Mirror the PC desktop live on this iPad, same-room only."
         }
     }
 }

@@ -19,6 +19,7 @@ final class RemoteInputController {
     var capabilitySnapshot: WindowsAgentCapabilitySnapshot?
     var agentCommandExecution: WindowsAgentCommandExecution?
     let goXLR = GoXLRStore()
+    let screenMirror = ScreenMirrorStore()
     var usesMockAgent = true
     var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
     var windowsAgentLocalAddress = ""
@@ -89,6 +90,7 @@ final class RemoteInputController {
             preferences = saved
         }
         goXLR.attach(controller: self)
+        screenMirror.attach(controller: self)
     }
 
     func savePreferences() {
@@ -126,6 +128,7 @@ final class RemoteInputController {
         savePreferences()
         await refreshAgentSecurityState()
         await goXLR.agentConfigurationChanged()
+        await screenMirror.agentConfigurationChanged()
     }
 
     private var configuredAgentAddresses: [String] {
@@ -225,6 +228,7 @@ final class RemoteInputController {
     func revokePairing() async {
         await disconnect()
         await goXLR.agentDidDisconnect()
+        await screenMirror.agentDidDisconnect()
         await service.revokePairing()
         try? pairingKeychain.delete(account: pairingCredentialAccount)
         pairingState = .revoked
@@ -644,5 +648,13 @@ final class RemoteInputController {
               let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
               !credential.isEmpty else { return nil }
         return GoXLRAudioConfiguration(addresses: configuredAgentAddresses, credential: credential)
+    }
+
+    var screenMirrorConfiguration: ScreenMirrorConfiguration? {
+        guard !usesMockAgent,
+              !configuredAgentAddresses.isEmpty,
+              let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
+              !credential.isEmpty else { return nil }
+        return ScreenMirrorConfiguration(addresses: configuredAgentAddresses, credential: credential)
     }
 }
