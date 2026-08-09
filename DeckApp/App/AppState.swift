@@ -42,6 +42,7 @@ final class AppState {
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
     var sceneOrchestrationExecution: SceneOrchestrationExecution?
+    var discordScreenShareHotkey: HotkeyCombo?
     let remoteInput: RemoteInputController
 
     let dashboardService: any DashboardService
@@ -94,6 +95,7 @@ final class AppState {
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
         favoriteSceneActionIDs = Set(UserDefaults.standard.stringArray(forKey: "homeAssistant.favoriteSceneActions") ?? [])
         sceneOrchestrationExecution = nil
+        discordScreenShareHotkey = (try? JSONDecoder().decode(HotkeyCombo.self, from: UserDefaults.standard.data(forKey: "discord.screenShareHotkey") ?? Data()))
         let savedButtonMapping = companionSettings.loadButtonMapping()
         let savedDashboardMappings = companionSettings.loadDashboardMappings()
         companionAddress = companionSettings.loadAddress()
@@ -1148,6 +1150,40 @@ final class AppState {
     func toggleMockLight() async {
         mockRoomControl.light.isOn.toggle()
         await confirmMockControl("Light power")
+    }
+
+    func setDiscordScreenShareHotkey(_ combo: HotkeyCombo?) {
+        discordScreenShareHotkey = combo
+        if let combo, let data = try? JSONEncoder().encode(combo) {
+            UserDefaults.standard.set(data, forKey: "discord.screenShareHotkey")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "discord.screenShareHotkey")
+        }
+    }
+
+    @discardableResult
+    func triggerDiscordScreenShareHotkey() async -> Bool {
+        guard let combo = discordScreenShareHotkey else { return false }
+        return await remoteInput.sendHotkey(combo)
+    }
+
+    func toggleMockDiscordConnection() async {
+        if mockRoomControl.discord.isConnected {
+            mockRoomControl.discord.isConnected = false
+        } else {
+            mockRoomControl.discord.isConnected = true
+        }
+        await confirmMockControl("Discord voice connection")
+    }
+
+    func toggleMockDiscordMute() async {
+        mockRoomControl.discord.selfMute.toggle()
+        await confirmMockControl("Discord mute")
+    }
+
+    func toggleMockDiscordDeafen() async {
+        mockRoomControl.discord.selfDeaf.toggle()
+        await confirmMockControl("Discord deafen")
     }
 
     func toggleSpotifyPlayback() async {

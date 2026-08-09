@@ -68,6 +68,11 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         }
     }
 
+    private struct HotkeyBody: Encodable {
+        let keyCode: Int
+        let modifiers: Int
+    }
+
     private struct CapabilityCommandBody: Encodable {
         let command: String
         let id: String
@@ -275,6 +280,11 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         )
     }
 
+    func sendHotkey(keyCode: Int, modifiers: Int) async throws {
+        let body = try JSONEncoder().encode(HotkeyBody(keyCode: keyCode, modifiers: modifiers))
+        try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/hotkey", body: body, authenticated: true)
+    }
+
     func connect() async throws -> RemoteAgentSession {
         lastDisconnectReason = nil
         let security = try await fetchSecurityState()
@@ -456,8 +466,8 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         catch { throw WindowsRemoteInputError.invalidResponse }
     }
 
-    private func requestWithoutResponse(method: String, path: String, authenticated: Bool) async throws {
-        _ = try await performRequest(method: method, path: path, body: nil, authenticated: authenticated)
+    private func requestWithoutResponse(method: String, path: String, body: Data? = nil, authenticated: Bool) async throws {
+        _ = try await performRequest(method: method, path: path, body: body, authenticated: authenticated)
     }
 
     private func performRequest(

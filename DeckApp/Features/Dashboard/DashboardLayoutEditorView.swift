@@ -431,6 +431,7 @@ private extension RoomWidgetKind {
         case .companionActions: "Companion Actions"
         case .remoteInputLauncher: "PC Remote"
         case .spotify: "Spotify"
+        case .discord: "Discord"
         }
     }
 
@@ -444,6 +445,7 @@ private extension RoomWidgetKind {
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
         case .spotify: "Now playing, playback controls, like, and add to playlist."
+        case .discord: "Voice channel status, mute/deafen, join/leave, and screen share."
         }
     }
 }

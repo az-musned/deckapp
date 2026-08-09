@@ -31,6 +31,7 @@ public static class InputPayloadParser
             "unicodeText" => new UnicodeTextCommand(String(value, "_0", 4_096)),
             "clipboardText" => new ClipboardTextCommand(String(value, "_0", 8_192), Boolean(value, "pasteAfterCopy")),
             "releaseAll" => new ReleaseAllCommand(),
+            "keyChord" => new KeyChordCommand((ushort)UInt16Range(value, "keyCode"), Modifiers(value, "modifiers")),
             _ => throw new JsonException("Unknown input command.")
         };
     }
@@ -44,6 +45,12 @@ public static class InputPayloadParser
         _ => false
     };
 
+    private static int UInt16Range(JsonElement value, string name)
+    {
+        var number = value.GetProperty(name).GetInt32();
+        if (number is < 0 or > 65_535) throw new JsonException($"{name} is outside its allowed range.");
+        return number;
+    }
     private static double Number(JsonElement value, string name)
     {
         var number = value.GetProperty(name).GetDouble();

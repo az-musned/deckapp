@@ -79,6 +79,14 @@ struct MockGoXLRState: Codable, Sendable, Equatable {
     ]
 }
 
+struct MockDiscordState: Codable, Sendable, Equatable {
+    var isConnected = true
+    var channelName = "General"
+    var selfMute = false
+    var selfDeaf = false
+    var participantNames = ["az", "nova", "kai"]
+}
+
 struct MockRoomControlState: Codable, Sendable, Equatable {
     var light = MockLightState()
     var climate = MockClimateState()
@@ -86,6 +94,7 @@ struct MockRoomControlState: Codable, Sendable, Equatable {
     var pcPower = MockPCPowerState()
     var goXLR = MockGoXLRState()
     var spotify = MockSpotifyState()
+    var discord = MockDiscordState()
 
     static let preview = MockRoomControlState()
 }
