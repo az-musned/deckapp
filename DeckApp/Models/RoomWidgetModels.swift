@@ -8,6 +8,7 @@ enum RoomWidgetKind: String, Codable, CaseIterable, Sendable {
     case audioMixer
     case companionActions
     case remoteInputLauncher
+    case spotify
 }
 
 enum RoomWidgetSize: String, Codable, CaseIterable, Sendable {
@@ -227,6 +228,17 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 audioMixerChannelIDs: RoomWidgetDefinition.defaultGoXLRChannelIDs
             ),
             RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A108")!,
+                title: "Spotify",
+                subtitle: "Mock media session",
+                symbol: "music.note",
+                tintName: "green",
+                kind: .spotify,
+                size: .medium,
+                backend: WidgetBackendReference(backend: .mock, identifier: "mock.media_player.spotify"),
+                capabilities: MockCapabilities.spotify
+            ),
+            RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,
                 title: "Companion Actions",
                 subtitle: "Existing actions and macros",
@@ -291,6 +303,12 @@ enum MockCapabilities {
         DeviceCapabilityDescriptor(id: "mic", kind: .numericRange, name: "Mic", numericRange: NumericRangeCapability(id: "mic", name: "Mic", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.76, isWritable: true)),
         DeviceCapabilityDescriptor(id: "music", kind: .numericRange, name: "Music", numericRange: NumericRangeCapability(id: "music", name: "Music", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.62, isWritable: true)),
         DeviceCapabilityDescriptor(id: "system", kind: .numericRange, name: "System", numericRange: NumericRangeCapability(id: "system", name: "System", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.55, isWritable: true))
+    ]
+
+    static let spotify: [DeviceCapabilityDescriptor] = [
+        DeviceCapabilityDescriptor(id: "media_playback", kind: .mediaPlayback, name: "Playback"),
+        DeviceCapabilityDescriptor(id: "like", kind: .action, name: "Like Track"),
+        DeviceCapabilityDescriptor(id: "add_to_playlist", kind: .action, name: "Add to Playlist")
     ]
 
     static let companion: [DeviceCapabilityDescriptor] = [

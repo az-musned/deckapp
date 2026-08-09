@@ -430,6 +430,7 @@ private extension RoomWidgetKind {
         case .audioMixer: "Audio Mixer"
         case .companionActions: "Companion Actions"
         case .remoteInputLauncher: "PC Remote"
+        case .spotify: "Spotify"
         }
     }
 
@@ -442,6 +443,7 @@ private extension RoomWidgetKind {
         case .audioMixer: "Capability-driven audio channel levels and mute."
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
+        case .spotify: "Now playing, playback controls, like, and add to playlist."
         }
     }
 }

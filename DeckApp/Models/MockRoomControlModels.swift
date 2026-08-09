@@ -85,6 +85,7 @@ struct MockRoomControlState: Codable, Sendable, Equatable {
     var television = MockTelevisionState()
     var pcPower = MockPCPowerState()
     var goXLR = MockGoXLRState()
+    var spotify = MockSpotifyState()
 
     static let preview = MockRoomControlState()
 }

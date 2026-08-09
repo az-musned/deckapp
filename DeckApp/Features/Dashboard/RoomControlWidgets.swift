@@ -25,6 +25,8 @@ struct RoomControlWidgetView: View {
             CompanionActionsWidget(definition: definition, compact: compact)
         case .remoteInputLauncher:
             RemoteInputLauncherWidget(definition: definition)
+        case .spotify:
+            MockSpotifyWidget(definition: definition, compact: compact)
         }
     }
 }
@@ -773,6 +775,122 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct MockSpotifyWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: appState.mockRoomControl.spotify.availability)
+
+            HStack(spacing: DesignToken.Spacing.medium) {
+                GlassIcon(symbol: track.artworkSymbol, tint: DesignToken.Color.positive, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("\(track.artist) — \(track.album)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                likeButton
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView(value: progress.current, total: progress.total)
+                    .tint(DesignToken.Color.positive)
+                HStack {
+                    Text(formatted(progress.current)).font(.caption2.monospacedDigit())
+                    Spacer()
+                    Text(formatted(progress.total)).font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: DesignToken.Spacing.large) {
+                Spacer()
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: false) }
+                } label: {
+                    Image(systemName: "backward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Task { await appState.toggleSpotifyPlayback() }
+                } label: {
+                    Image(systemName: appState.mockRoomControl.spotify.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.positive.opacity(0.22), interactive: true)
+
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: true) }
+                } label: {
+                    Image(systemName: "forward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+
+            addToPlaylistMenu
+        }
+    }
+
+    private var track: MockSpotifyTrack { appState.mockRoomControl.spotify.currentTrack }
+
+    private var progress: (current: Double, total: Double) {
+        (min(appState.mockRoomControl.spotify.progressSeconds, track.durationSeconds), track.durationSeconds)
+    }
+
+    private func formatted(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var isLiked: Bool {
+        appState.mockRoomControl.spotify.isLiked(track.id)
+    }
+
+    private var likeButton: some View {
+        Button {
+            Task { await appState.toggleSpotifyLike() }
+        } label: {
+            Image(systemName: isLiked ? "heart.fill" : "heart")
+                .foregroundStyle(isLiked ? DesignToken.Color.destructive : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.subtle, cornerRadius: 999, tint: isLiked ? DesignToken.Color.destructive.opacity(0.16) : Color.clear)
+        .accessibilityLabel(isLiked ? "Unlike" : "Like")
+    }
+
+    private var addToPlaylistMenu: some View {
+        Menu {
+            ForEach(appState.mockRoomControl.spotify.playlists) { playlist in
+                Button {
+                    Task { await appState.toggleCurrentSpotifyTrack(inPlaylistID: playlist.id) }
+                } label: {
+                    if playlist.trackIDs.contains(track.id) {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text(playlist.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.16), interactive: true)
     }
 }
 

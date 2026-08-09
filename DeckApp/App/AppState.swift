@@ -1150,6 +1150,42 @@ final class AppState {
         await confirmMockControl("Light power")
     }
 
+    func toggleSpotifyPlayback() async {
+        mockRoomControl.spotify.isPlaying.toggle()
+        await confirmMockControl("Spotify playback")
+    }
+
+    func skipSpotifyTrack(forward: Bool) async {
+        let count = MockSpotifyState.library.count
+        mockRoomControl.spotify.trackIndex = (mockRoomControl.spotify.trackIndex + (forward ? 1 : -1) + count) % count
+        mockRoomControl.spotify.progressSeconds = 0
+        await confirmMockControl(forward ? "Spotify skip" : "Spotify previous")
+    }
+
+    func toggleSpotifyLike() async {
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        if mockRoomControl.spotify.likedTrackIDs.contains(trackID) {
+            mockRoomControl.spotify.likedTrackIDs.remove(trackID)
+            await confirmMockControl("Removed from Liked Songs")
+        } else {
+            mockRoomControl.spotify.likedTrackIDs.insert(trackID)
+            await confirmMockControl("Added to Liked Songs")
+        }
+    }
+
+    func toggleCurrentSpotifyTrack(inPlaylistID playlistID: String) async {
+        guard let index = mockRoomControl.spotify.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        let playlistName = mockRoomControl.spotify.playlists[index].name
+        if let trackIndex = mockRoomControl.spotify.playlists[index].trackIDs.firstIndex(of: trackID) {
+            mockRoomControl.spotify.playlists[index].trackIDs.remove(at: trackIndex)
+            await confirmMockControl("Removed from \(playlistName)")
+        } else {
+            mockRoomControl.spotify.playlists[index].trackIDs.append(trackID)
+            await confirmMockControl("Added to \(playlistName)")
+        }
+    }
+
     func toggleMockTelevisionPower() async {
         guard mockRoomControl.television.isOnline else {
             pendingCommand = CommandExecution(
