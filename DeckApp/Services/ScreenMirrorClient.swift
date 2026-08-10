@@ -156,8 +156,16 @@ actor ScreenMirrorClient: ScreenMirrorServing {
             }
 
             guard case .data(let data) = received,
-                  let wireFrame = ScreenStreamWireFrameParser.parse(data),
-                  sequenceTracker.accepts(wireFrame.sequence) else { continue }
+                  let wireFrame = ScreenStreamWireFrameParser.parse(data) else { continue }
+            let (accepted, gapDetected) = sequenceTracker.accepts(wireFrame.sequence)
+            guard accepted else { continue }
+            if gapDetected {
+                // One or more frames were dropped before this one arrived (broadcaster
+                // backpressure) -- H.264's reference chain is now broken, so ask for a
+                // keyframe to resync rather than let the decoder keep producing corrupted
+                // output against a stale reference until the next scheduled IDR.
+                try? await currentSocket.send(.string(#"{"type":"screen.requestKeyframe"}"#))
+            }
             guard let sampleBuffer = await decoder.decode(wireFrame) else { continue }
             if !announcedConnected {
                 state(.connected)

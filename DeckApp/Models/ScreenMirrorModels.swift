@@ -37,14 +37,21 @@ nonisolated enum ScreenMirrorConnectionState: Equatable, Sendable {
 nonisolated struct ScreenStreamSequenceTracker: Sendable {
     private(set) var latest: UInt32?
 
-    mutating func accepts(_ sequence: UInt32) -> Bool {
+    /// H.264 delta frames are differential -- each depends on the previous frame having
+    /// decoded successfully. A gap here (a sequence number more than one past the last
+    /// accepted one) means the Agent's broadcaster dropped one or more frames for
+    /// backpressure, silently breaking the decoder's reference chain. `gapDetected` lets
+    /// the caller request a fresh keyframe to resync instead of continuing to decode
+    /// against a now-invalid reference (which shows up as corrupted/stale-looking frames).
+    mutating func accepts(_ sequence: UInt32) -> (accepted: Bool, gapDetected: Bool) {
         guard let latest else {
             self.latest = sequence
-            return true
+            return (true, false)
         }
-        guard sequence > latest || latest - sequence > UInt32.max / 2 else { return false }
+        guard sequence > latest || latest - sequence > UInt32.max / 2 else { return (false, false) }
+        let gapDetected = sequence != latest &+ 1
         self.latest = sequence
-        return true
+        return (true, gapDetected)
     }
 
     mutating func reset() { latest = nil }
