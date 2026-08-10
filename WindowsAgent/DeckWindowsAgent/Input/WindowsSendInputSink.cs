@@ -56,6 +56,9 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                 case VirtualKeyCommand key:
                     ApplyVirtualKey(sessionId, key);
                     break;
+                case KeyChordCommand chord:
+                    ApplyKeyChord(sessionId, chord);
+                    break;
                 case UnicodeTextCommand text:
                     ApplyUnicodeText(text.Text);
                     break;
@@ -117,6 +120,17 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
                 foreach (var modifier in transient.AsEnumerable().Reverse()) ApplyKey(sessionId, modifier, false);
             }
         }
+    }
+
+    private void ApplyKeyChord(Guid sessionId, KeyChordCommand command)
+    {
+        if (!HotkeyKeyAllowList.IsAllowed(command.KeyCode))
+            throw new InputInjectionException("That key is not allowed for remote hotkeys.");
+        var modifiers = ModifierKeys(command.Modifiers).ToArray();
+        foreach (var modifier in modifiers) ApplyKey(sessionId, modifier, true);
+        ApplyKey(sessionId, command.KeyCode, true);
+        ApplyKey(sessionId, command.KeyCode, false);
+        foreach (var modifier in modifiers.Reverse()) ApplyKey(sessionId, modifier, false);
     }
 
     private void ApplyKey(Guid sessionId, ushort key, bool isDown)

@@ -9,6 +9,7 @@ enum RoomWidgetKind: String, Codable, CaseIterable, Sendable {
     case companionActions
     case remoteInputLauncher
     case screenMirror
+    case discord
 }
 
 enum RoomWidgetSize: String, Codable, CaseIterable, Sendable {
@@ -252,6 +253,17 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 screenMirrorMode: .extend
             ),
             RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A109")!,
+                title: "Discord",
+                subtitle: "Authenticated Windows Agent voice bridge",
+                symbol: "person.wave.2.fill",
+                tintName: "purple",
+                kind: .discord,
+                size: .wide,
+                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.discord"),
+                capabilities: MockCapabilities.discord
+            ),
+            RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,
                 title: "Companion Actions",
                 subtitle: "Existing actions and macros",
@@ -316,6 +328,12 @@ enum MockCapabilities {
         DeviceCapabilityDescriptor(id: "mic", kind: .numericRange, name: "Mic", numericRange: NumericRangeCapability(id: "mic", name: "Mic", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.76, isWritable: true)),
         DeviceCapabilityDescriptor(id: "music", kind: .numericRange, name: "Music", numericRange: NumericRangeCapability(id: "music", name: "Music", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.62, isWritable: true)),
         DeviceCapabilityDescriptor(id: "system", kind: .numericRange, name: "System", numericRange: NumericRangeCapability(id: "system", name: "System", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.55, isWritable: true))
+    ]
+
+    static let discord: [DeviceCapabilityDescriptor] = [
+        DeviceCapabilityDescriptor(id: "voice_connection", kind: .mediaPlayback, name: "Voice Connection"),
+        DeviceCapabilityDescriptor(id: "mute", kind: .mute, name: "Mute"),
+        DeviceCapabilityDescriptor(id: "screen_share", kind: .action, name: "Screen Share")
     ]
 
     static let companion: [DeviceCapabilityDescriptor] = [

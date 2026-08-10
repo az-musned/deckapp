@@ -2,6 +2,7 @@ using System.Net;
 using DeckWindowsAgent.Audio;
 using DeckWindowsAgent.Capabilities;
 using DeckWindowsAgent.Configuration;
+using DeckWindowsAgent.Discord;
 using DeckWindowsAgent.Input;
 using DeckWindowsAgent.Protocol;
 using DeckWindowsAgent.Safety;
@@ -51,6 +52,10 @@ builder.Services.AddSingleton<ScreenStreamSequence>();
 builder.Services.AddSingleton<ScreenStreamService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ScreenStreamService>());
 builder.Services.AddHostedService<LocalSafetyConsoleService>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton(new DiscordTokenStore(Path.Combine(dataDirectory, "discord-token.json")));
+builder.Services.AddSingleton<DiscordBridgeService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBridgeService>());
 
 var app = builder.Build();
 app.UseWebSockets(new WebSocketOptions
@@ -135,12 +140,36 @@ app.MapPost("/api/v1/agent/commands", async (
     }
 });
 
+app.MapPost("/api/v1/agent/hotkey", async (HttpContext context, HotkeyRequest request, PairingService pairing, AgentSafetyState safety, IWindowsInputSink sink) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    if (!safety.RemoteInputAllowed || safety.EmergencyInputDisabled || !sink.IsAvailable)
+        return Results.Json(new { error = "Input injection is unavailable." }, statusCode: StatusCodes.Status409Conflict);
+    if (!HotkeyKeyAllowList.IsAllowed(request.KeyCode))
+        return Results.BadRequest(new { error = "That key is not allowed for remote hotkeys." });
+    if (request.Modifiers is < 0 or > 15)
+        return Results.BadRequest(new { error = "Invalid modifier mask." });
+
+    try
+    {
+        await sink.ApplyAsync(Guid.NewGuid(), new KeyChordCommand((ushort)request.KeyCode, request.Modifiers), context.RequestAborted);
+        return Results.Ok();
+    }
+    catch (InputInjectionException error)
+    {
+        return Results.Json(new { error = error.Message }, statusCode: StatusCodes.Status409Conflict);
+    }
+});
+
 app.MapInputWebSocket();
 app.MapAudioMeterEndpoints();
 app.MapAudioMeterWebSocket();
 app.MapScreenStreamWebSocket();
+app.MapDiscordWebSocket();
 
 app.Run();
+
+internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
 
 static bool TryAuthenticate(HttpContext context, PairingService pairing)
 {

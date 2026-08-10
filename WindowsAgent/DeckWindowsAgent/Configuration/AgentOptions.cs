@@ -17,6 +17,11 @@ public sealed class AgentOptions
     public AudioMeterOptions AudioMeters { get; init; } = new();
     public ScreenStreamOptions ScreenStream { get; init; } = new();
 
+    /// <summary>Discord Application client ID/secret (developer.discord.com) used for the local RPC bridge.
+    /// Optional: when either is blank the Discord widget stays unavailable instead of failing startup.</summary>
+    public string DiscordClientId { get; init; } = string.Empty;
+    public string DiscordClientSecret { get; init; } = string.Empty;
+
     public void Validate()
     {
         var addresses = EffectiveBindAddresses;

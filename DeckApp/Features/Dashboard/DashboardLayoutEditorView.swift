@@ -368,6 +368,7 @@ private extension RoomWidgetKind {
         case .companionActions: "Companion Actions"
         case .remoteInputLauncher: "PC Remote"
         case .screenMirror: "Screen Mirror"
+        case .discord: "Discord"
         }
     }
 
@@ -381,6 +382,7 @@ private extension RoomWidgetKind {
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
         case .screenMirror: "Mirror the PC desktop live on this iPad, same-room only."
+        case .discord: "Voice channel status, mute/deafen, join/leave, and screen share."
         }
     }
 }

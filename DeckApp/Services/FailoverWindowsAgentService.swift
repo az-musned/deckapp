@@ -159,6 +159,21 @@ actor FailoverWindowsAgentService: WindowsRemoteInputServing {
         activeIndex = nil
     }
 
+    func sendHotkey(keyCode: Int, modifiers: Int) async throws {
+        var lastError: Error = WindowsRemoteInputError.disconnected
+        for index in preferredIndices {
+            do {
+                try await clients[index].sendHotkey(keyCode: keyCode, modifiers: modifiers)
+                activeIndex = index
+                return
+            } catch {
+                lastError = error
+                if !Self.canFailOver(after: error) { throw error }
+            }
+        }
+        throw lastError
+    }
+
     private var preferredIndices: [Int] {
         let all = Array(clients.indices)
         guard let activeIndex, all.contains(activeIndex) else { return all }

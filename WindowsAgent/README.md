@@ -121,3 +121,22 @@ Applications and games must be explicitly allowlisted in ignored `appsettings.Lo
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
 
 `appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate, trusts that root for the current Windows user so the Agent's strict certificate lookup succeeds, verifies the server IP SAN and non-exportable private keys, and restricts its firewall rule to the selected private address, its exact Windows interface, and `LocalSubnet`. Windows Mobile Hotspot interfaces do not expose a normal NLA profile, so the rule applies across profiles but cannot match another interface or address; it does not create router forwarding or allow non-local peers.
+
+## Discord widget (optional)
+
+The Discord widget talks to the local Discord desktop client over its RPC named pipe — not Discord's public bot API — so it can join/leave your own voice channels, mute/deafen, and read who else is in the channel.
+
+1. Create a Discord Application at https://discord.com/developers/applications (no bot required) and copy its **Client ID** and **Client Secret**.
+2. Add both to `DeckWindowsAgent/appsettings.Local.json`:
+   ```json
+   {
+     "Agent": {
+       "DiscordClientId": "your-client-id",
+       "DiscordClientSecret": "your-client-secret"
+     }
+   }
+   ```
+3. Start the Agent with Discord already running. The first connection pops Discord's native "An app wants to access your account" prompt on the PC — approve it once; the Agent stores a refresh token under `%LocalAppData%\DeckWindowsAgent\discord-token.json` and won't prompt again.
+4. Leave both settings blank to keep the widget disabled — nothing else changes.
+
+The widget's "Share" button doesn't use Discord's RPC (screen-share isn't exposed there); it replays a hotkey you pick in DeckApp against whatever tool is already bound to it (e.g. a Vencord plugin), through the same `SendInput` path as ordinary remote keyboard input.

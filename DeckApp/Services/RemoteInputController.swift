@@ -21,6 +21,7 @@ final class RemoteInputController {
     let goXLR = GoXLRStore()
     let screenMirror = ScreenMirrorStore(mode: .mirror)
     let extendDisplay = ScreenMirrorStore(mode: .extend)
+    let discord = DiscordStore()
     var usesMockAgent = true
     var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
     var windowsAgentLocalAddress = ""
@@ -93,6 +94,7 @@ final class RemoteInputController {
         goXLR.attach(controller: self)
         screenMirror.attach(controller: self)
         extendDisplay.attach(controller: self)
+        discord.attach(controller: self)
     }
 
     func savePreferences() {
@@ -170,6 +172,18 @@ final class RemoteInputController {
             return WindowsAgentClient(address: address, defaults: defaults)
         }
         return FailoverWindowsAgentService(addresses: addresses, defaults: defaults)
+    }
+
+    /// Replays a user-configured hotkey (e.g. a Vencord plugin's screen-share toggle) on the paired PC.
+    /// Returns whether the agent accepted it; callers surface failure inline rather than throwing.
+    func sendHotkey(_ combo: HotkeyCombo) async -> Bool {
+        guard pairingState.isPaired else { return false }
+        do {
+            try await service.sendHotkey(keyCode: combo.keyCode, modifiers: combo.modifiers.rawValue)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func refreshAgentSecurityState() async {
@@ -648,5 +662,13 @@ final class RemoteInputController {
               let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
               !credential.isEmpty else { return nil }
         return ScreenMirrorConfiguration(addresses: configuredAgentAddresses, credential: credential)
+    }
+
+    var discordBridgeConfiguration: DiscordBridgeConfiguration? {
+        guard !usesMockAgent,
+              !configuredAgentAddresses.isEmpty,
+              let credential = try? pairingKeychain.load(account: pairingCredentialAccount),
+              !credential.isEmpty else { return nil }
+        return DiscordBridgeConfiguration(addresses: configuredAgentAddresses, credential: credential)
     }
 }
