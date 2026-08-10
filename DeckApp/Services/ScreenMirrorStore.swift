@@ -1,11 +1,12 @@
-import CoreGraphics
+import AVFoundation
 import Foundation
 import Observation
 
 @MainActor
 @Observable
 final class ScreenMirrorStore {
-    private(set) var latestFrame: CGImage?
+    let displayLayer = AVSampleBufferDisplayLayer()
+    private(set) var hasReceivedFrame = false
     private(set) var connectionState: ScreenMirrorConnectionState = .disconnected
     private(set) var isStale = true
 
@@ -91,12 +92,18 @@ final class ScreenMirrorStore {
         await client.stop()
         connectionState = .disconnected
         isStale = true
+        hasReceivedFrame = false
+        displayLayer.flush()
     }
 
     private func apply(_ frame: ScreenStreamFrame) {
         lastFrameDate = Date()
         isStale = false
-        latestFrame = frame.image
+        hasReceivedFrame = true
+        if displayLayer.status == .failed {
+            displayLayer.flush()
+        }
+        displayLayer.enqueue(frame.sampleBuffer)
     }
 
     private func updateStaleness(now: Date) {

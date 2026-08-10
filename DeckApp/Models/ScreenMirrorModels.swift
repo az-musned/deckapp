@@ -1,6 +1,5 @@
-import CoreGraphics
+import CoreMedia
 import Foundation
-import ImageIO
 
 nonisolated enum ScreenMirrorMode: String, Codable, Sendable {
     case mirror
@@ -51,41 +50,57 @@ nonisolated struct ScreenStreamSequenceTracker: Sendable {
     mutating func reset() { latest = nil }
 }
 
-nonisolated struct ScreenStreamFrame: Sendable {
+/// One binary WebSocket message as received from the Agent: the fixed 26-byte header plus
+/// the raw H.264 Annex-B payload for that frame. Decoding to a displayable sample buffer
+/// happens in `ScreenMirrorDecoder`, which needs per-connection state (a `VTDecompressionSession`)
+/// that doesn't belong in a stateless parser.
+nonisolated struct ScreenStreamWireFrame: Sendable {
     let sequence: UInt32
     let timestampMilliseconds: Int64
     let width: Int
     let height: Int
-    let image: CGImage
+    let isKeyframe: Bool
+    let annexB: Data
 }
 
-nonisolated enum ScreenStreamFrameDecoder {
-    private static let headerLength = 26
+// CMSampleBuffer predates Swift's Sendable checking but is safe for this single-owner
+// handoff from the decode call site to the MainActor store that enqueues it for display --
+// the same pattern AVFoundation's own capture-output delegates rely on.
+nonisolated struct ScreenStreamFrame: @unchecked Sendable {
+    let sequence: UInt32
+    let timestampMilliseconds: Int64
+    let sampleBuffer: CMSampleBuffer
+}
 
-    static func decode(_ data: Data) -> ScreenStreamFrame? {
+nonisolated enum ScreenStreamWireFrameParser {
+    private static let headerLength = 26
+    private static let keyframeFlag: UInt8 = 0x01
+
+    static func parse(_ data: Data) -> ScreenStreamWireFrame? {
         guard data.count > headerLength else { return nil }
+        var flags: UInt8 = 0
         var sequence: UInt32 = 0
         var timestamp: Int64 = 0
         var width: UInt32 = 0
         var height: UInt32 = 0
-        var jpegLength: UInt32 = 0
+        var payloadLength: UInt32 = 0
         data.withUnsafeBytes { raw in
+            flags = raw.loadUnaligned(fromByteOffset: 1, as: UInt8.self)
             sequence = raw.loadUnaligned(fromByteOffset: 2, as: UInt32.self).littleEndian
             timestamp = raw.loadUnaligned(fromByteOffset: 6, as: Int64.self).littleEndian
             width = raw.loadUnaligned(fromByteOffset: 14, as: UInt32.self).littleEndian
             height = raw.loadUnaligned(fromByteOffset: 18, as: UInt32.self).littleEndian
-            jpegLength = raw.loadUnaligned(fromByteOffset: 22, as: UInt32.self).littleEndian
+            payloadLength = raw.loadUnaligned(fromByteOffset: 22, as: UInt32.self).littleEndian
         }
-        guard data.count >= headerLength + Int(jpegLength) else { return nil }
-        let jpegData = data.subdata(in: headerLength..<(headerLength + Int(jpegLength)))
-        guard let source = CGImageSourceCreateWithData(jpegData as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        return ScreenStreamFrame(
+        guard data.count >= headerLength + Int(payloadLength) else { return nil }
+        let annexB = data.subdata(in: headerLength..<(headerLength + Int(payloadLength)))
+        return ScreenStreamWireFrame(
             sequence: sequence,
             timestampMilliseconds: timestamp,
             width: Int(width),
             height: Int(height),
-            image: image
+            isKeyframe: (flags & keyframeFlag) != 0,
+            annexB: annexB
         )
     }
 }

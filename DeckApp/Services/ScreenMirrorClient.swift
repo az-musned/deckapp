@@ -116,6 +116,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         let currentSocket = session.webSocketTask(with: request)
         socket = currentSocket
         var sequenceTracker = ScreenStreamSequenceTracker()
+        let decoder = ScreenMirrorDecoder()
         currentSocket.resume()
 
         let heartbeat = Task(priority: .utility) {
@@ -145,18 +146,28 @@ actor ScreenMirrorClient: ScreenMirrorServing {
 
             if !receivedFirstMessage {
                 receivedFirstMessage = true
-                guard case .string = received else { continue }
+                guard case .string(let text) = received,
+                      let helloData = text.data(using: .utf8),
+                      (try? JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: helloData)) != nil else { continue }
+                // Ask for an immediate keyframe so the decoder doesn't sit on a black
+                // screen until the encoder's next scheduled IDR.
+                try? await currentSocket.send(.string(#"{"type":"screen.requestKeyframe"}"#))
                 continue
             }
 
             guard case .data(let data) = received,
-                  let decoded = ScreenStreamFrameDecoder.decode(data),
-                  sequenceTracker.accepts(decoded.sequence) else { continue }
+                  let wireFrame = ScreenStreamWireFrameParser.parse(data),
+                  sequenceTracker.accepts(wireFrame.sequence) else { continue }
+            guard let sampleBuffer = decoder.decode(wireFrame) else { continue }
             if !announcedConnected {
                 state(.connected)
                 announcedConnected = true
             }
-            frame(decoded)
+            frame(ScreenStreamFrame(
+                sequence: wireFrame.sequence,
+                timestampMilliseconds: wireFrame.timestampMilliseconds,
+                sampleBuffer: sampleBuffer
+            ))
         }
     }
 
