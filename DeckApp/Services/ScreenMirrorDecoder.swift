@@ -50,7 +50,13 @@ nonisolated final class ScreenMirrorDecoder {
         guard let session, let formatDescription, !sliceNalUnits.isEmpty else { return nil }
         guard let blockBuffer = Self.makeAVCCBlockBuffer(from: sliceNalUnits) else { return nil }
 
-        let presentationTime = CMTime(value: wireFrame.timestampMilliseconds, timescale: 1000)
+        // Deliberately not using wireFrame.timestampMilliseconds (the PC's wall-clock Unix
+        // time) here -- AVSampleBufferDisplayLayer schedules display against its own
+        // controlTimebase, which is synced to the host clock (see ScreenMirrorStore). Feeding
+        // it an unrelated absolute clock as the presentation timestamp made display scheduling
+        // essentially arbitrary relative to "now", which showed up as frames appearing to
+        // jump backward/forward instead of playing smoothly in arrival order.
+        let presentationTime = CMClockGetTime(CMClockGetHostTimeClock())
         var timingInfo = CMSampleTimingInfo(
             duration: .invalid,
             presentationTimeStamp: presentationTime,
