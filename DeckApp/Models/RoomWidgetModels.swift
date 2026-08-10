@@ -72,6 +72,7 @@ enum WidgetBackendKind: String, Codable, Sendable {
     case windowsAgent
     case companion
     case lgWebOS
+    case spotify
 }
 
 struct WidgetBackendReference: Codable, Sendable, Equatable {
@@ -270,7 +271,7 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 tintName: "green",
                 kind: .spotify,
                 size: .medium,
-                backend: WidgetBackendReference(backend: .mock, identifier: "mock.media_player.spotify"),
+                backend: WidgetBackendReference(backend: .spotify, identifier: "spotify.account"),
                 capabilities: MockCapabilities.spotify
             ),
             RoomWidgetDefinition(

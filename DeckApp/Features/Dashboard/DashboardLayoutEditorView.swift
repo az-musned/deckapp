@@ -495,6 +495,7 @@ private extension WidgetBackendKind {
         case .windowsAgent: "Windows Agent"
         case .companion: "Companion"
         case .lgWebOS: "LG webOS"
+        case .spotify: "Spotify"
         }
     }
 }

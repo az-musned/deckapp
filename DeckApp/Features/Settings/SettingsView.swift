@@ -190,6 +190,51 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Spotify") {
+                    TextField("Client ID", text: Binding(
+                        get: { appState.spotify.clientID },
+                        set: { appState.spotify.clientID = $0 }
+                    ))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    LabeledContent("Status") {
+                        HStack(spacing: DesignToken.Spacing.xSmall) {
+                            if appState.spotify.connectionStatus == .connecting {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(appState.spotify.connectionStatus.title)
+                                .foregroundStyle(spotifyStatusColor)
+                        }
+                    }
+
+                    if case .failed(let message) = appState.spotify.connectionStatus {
+                        LabeledContent("Reason") {
+                            Text(message)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(DesignToken.Color.destructive)
+                        }
+                        .font(.caption)
+                    }
+
+                    if appState.spotify.isConnected {
+                        Button("Disconnect Spotify", role: .destructive) {
+                            appState.spotify.disconnect()
+                        }
+                    } else {
+                        Button {
+                            Task { await appState.spotify.connect() }
+                        } label: {
+                            Label("Connect Spotify Account", systemImage: "music.note")
+                        }
+                        .disabled(appState.spotify.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.spotify.connectionStatus == .connecting)
+                    }
+
+                    Text("Create an app at developer.spotify.com, add redirect URI deckapp://spotify-callback, and paste its Client ID above. Tokens are stored only in Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section {
                     TextField("PC address, for example 100.x.y.z:8000", text: companionAddressBinding)
                         .textInputAutocapitalization(.never)
@@ -337,7 +382,7 @@ struct SettingsView: View {
                 }
 
                 Section("Integrations") {
-                    SettingsPlaceholderRow(title: "Gree", detail: "Through Home Assistant", symbol: "snowflake")
+                    SettingsPlaceholderRow(title: "Gree", detail: "Direct cloud control · Climate tab", symbol: "snowflake")
                     SettingsPlaceholderRow(title: "Smart Life", detail: "Through Home Assistant", symbol: "house")
                     SettingsPlaceholderRow(title: "TV control", detail: "Through Home Assistant", symbol: "tv")
                 }
@@ -465,6 +510,15 @@ struct SettingsView: View {
         case .discovering: DesignToken.Color.warning
         case .failed: DesignToken.Color.destructive
         case .notConfigured: .secondary
+        }
+    }
+
+    private var spotifyStatusColor: Color {
+        switch appState.spotify.connectionStatus {
+        case .connected: DesignToken.Color.positive
+        case .connecting: DesignToken.Color.warning
+        case .failed: DesignToken.Color.destructive
+        case .notConnected: .secondary
         }
     }
 

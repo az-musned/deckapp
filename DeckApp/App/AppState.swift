@@ -45,7 +45,9 @@ final class AppState {
     var discordScreenShareHotkey: HotkeyCombo?
     let remoteInput: RemoteInputController
     let lgTV: LGTVStore
+    let spotify: SpotifyStore
     let sleepTimer = SleepTimerController()
+    let greeClimate = GreeClimateController()
 
     let dashboardService: any DashboardService
     let commandService: any CommandService
@@ -72,6 +74,7 @@ final class AppState {
         goveeService: any GoveeServing = GoveeClient(),
         remoteInput: RemoteInputController = RemoteInputController(),
         lgTV: LGTVStore = LGTVStore(),
+        spotify: SpotifyStore = SpotifyStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient()
     ) {
         self.dashboardService = dashboardService
@@ -81,6 +84,7 @@ final class AppState {
         self.goveeService = goveeService
         self.remoteInput = remoteInput
         self.lgTV = lgTV
+        self.spotify = spotify
         self.homeAssistantService = homeAssistantService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""

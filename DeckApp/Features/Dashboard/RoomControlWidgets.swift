@@ -32,7 +32,7 @@ struct RoomControlWidgetView: View {
         case .screenMirror:
             ScreenMirrorLauncherWidget(definition: definition)
         case .spotify:
-            MockSpotifyWidget(definition: definition, compact: compact)
+            SpotifyWidgetContainer(definition: definition, compact: compact)
         case .discord:
             DiscordWidget(definition: definition, compact: compact)
         }
@@ -251,6 +251,7 @@ private struct WidgetHeader: View {
         case .windowsAgent: "AGENT"
         case .companion: "COMPANION"
         case .lgWebOS: "LG TV"
+        case .spotify: "SPOTIFY"
         case .mock: "MOCK"
         }
     }
@@ -858,6 +859,178 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct SpotifyWidgetContainer: View {
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        if definition.backend.backend == .spotify {
+            LiveSpotifyWidget(definition: definition, compact: compact)
+        } else {
+            MockSpotifyWidget(definition: definition, compact: compact)
+        }
+    }
+}
+
+private struct LiveSpotifyWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    private var store: SpotifyStore { appState.spotify }
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: store.isConnected ? .available : .unavailable)
+
+            switch store.connectionStatus {
+            case .notConnected:
+                Label("Connect your Spotify account in Settings.", systemImage: "gearshape.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .connecting:
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(DesignToken.Color.destructive)
+            case .connected:
+                if store.playback.track != nil {
+                    readyContent
+                } else {
+                    Label("Nothing playing. Start playback on any Spotify device.", systemImage: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task {
+            await store.startWatching()
+            await store.loadPlaylistsIfNeeded()
+            do { try await Task.sleep(for: .seconds(86_400)) } catch { }
+            store.stopWatching()
+        }
+    }
+
+    @ViewBuilder
+    private var readyContent: some View {
+        let track = store.playback.track!
+
+        HStack(spacing: DesignToken.Spacing.medium) {
+            GlassIcon(symbol: "music.note", tint: DesignToken.Color.positive, size: 44)
+                .overlay {
+                    if let url = track.artworkURL {
+                        AsyncImage(url: url) { image in
+                            image.resizable().aspectRatio(contentMode: .fill)
+                        } placeholder: { EmptyView() }
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.control))
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(track.artist) — \(track.album)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            likeButton
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(value: progress.current, total: progress.total)
+                .tint(DesignToken.Color.positive)
+            HStack {
+                Text(formatted(progress.current)).font(.caption2.monospacedDigit())
+                Spacer()
+                Text(formatted(progress.total)).font(.caption2.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        HStack(spacing: DesignToken.Spacing.large) {
+            Spacer()
+            Button {
+                Task { await store.skip(forward: false) }
+            } label: {
+                Image(systemName: "backward.fill").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                Task { await store.togglePlayback() }
+            } label: {
+                Image(systemName: store.playback.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.positive.opacity(0.22), interactive: true)
+
+            Button {
+                Task { await store.skip(forward: true) }
+            } label: {
+                Image(systemName: "forward.fill").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+
+        if !store.playlists.isEmpty {
+            addToPlaylistMenu
+        }
+    }
+
+    private var progress: (current: Double, total: Double) {
+        let track = store.playback.track!
+        return (min(Double(store.playback.progressMS) / 1000, Double(track.durationMS) / 1000), Double(track.durationMS) / 1000)
+    }
+
+    private func formatted(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var likeButton: some View {
+        Button {
+            Task { await store.toggleLike() }
+        } label: {
+            Image(systemName: store.isLikedCurrentTrack ? "heart.fill" : "heart")
+                .foregroundStyle(store.isLikedCurrentTrack ? DesignToken.Color.destructive : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.subtle, cornerRadius: 999, tint: store.isLikedCurrentTrack ? DesignToken.Color.destructive.opacity(0.16) : Color.clear)
+        .accessibilityLabel(store.isLikedCurrentTrack ? "Unlike" : "Like")
+    }
+
+    private var addToPlaylistMenu: some View {
+        Menu {
+            ForEach(store.playlists) { playlist in
+                Button {
+                    Task { await store.togglePlaylistMembership(playlistID: playlist.id) }
+                } label: {
+                    if store.playlistMembership.contains(playlist.id) {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text(playlist.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.16), interactive: true)
     }
 }
 
