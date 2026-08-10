@@ -99,7 +99,7 @@ public sealed class ScreenStreamOptions
     public bool Enabled { get; init; } = true;
     public int TargetFps { get; init; } = 15;
     public int MaxWidth { get; init; } = 1920;
-    public int JpegQuality { get; init; } = 70;
+    public int BitrateKbps { get; init; } = 4000;
     public int MaximumClients { get; init; } = 2;
     public string? MirrorMonitorDeviceName { get; init; }
     public string? ExtendMonitorDeviceName { get; init; }
@@ -110,8 +110,8 @@ public sealed class ScreenStreamOptions
             throw new InvalidOperationException("Agent:ScreenStream:TargetFps must be between 5 and 30.");
         if (MaxWidth is < 640 or > 3840)
             throw new InvalidOperationException("Agent:ScreenStream:MaxWidth must be between 640 and 3840.");
-        if (JpegQuality is < 1 or > 100)
-            throw new InvalidOperationException("Agent:ScreenStream:JpegQuality must be between 1 and 100.");
+        if (BitrateKbps is < 500 or > 20000)
+            throw new InvalidOperationException("Agent:ScreenStream:BitrateKbps must be between 500 and 20000.");
         if (MaximumClients is < 1 or > 4)
             throw new InvalidOperationException("Agent:ScreenStream:MaximumClients must be between 1 and 4.");
     }

@@ -16,6 +16,8 @@ public sealed class ScreenStreamService(
     private readonly object _modeGate = new();
     private ScreenStreamMode? _activeMode;
     private IScreenCaptureSource? _source;
+    private H264Encoder? _encoder;
+    private int _lastSubscriberCount;
 
     /// Called by the WebSocket endpoint before subscribing a new client. Locks in the
     /// stream's active mode while any subscriber is connected; rejects a connection
@@ -26,11 +28,7 @@ public sealed class ScreenStreamService(
         {
             if (broadcaster.SubscriberCount == 0 || _activeMode is null)
             {
-                if (_activeMode != mode)
-                {
-                    _source?.Dispose();
-                    _source = null;
-                }
+                if (_activeMode != mode) TearDownCaptureLocked();
                 _activeMode = mode;
                 conflictReason = null;
                 return true;
@@ -45,6 +43,18 @@ public sealed class ScreenStreamService(
         }
     }
 
+    /// Forces the next encoded frame to be a fresh keyframe (with in-band SPS/PPS) by
+    /// recreating the encoder -- a newly-constructed encoder's first output is always an
+    /// IDR. Called when a client explicitly asks for one, e.g. right after connecting.
+    public void RequestKeyframe()
+    {
+        lock (_modeGate)
+        {
+            _encoder?.Dispose();
+            _encoder = null;
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.ScreenStream.Enabled)
@@ -55,26 +65,34 @@ public sealed class ScreenStreamService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var active = safety.ScreenShareAllowed && broadcaster.SubscriberCount > 0;
+            var subscriberCount = broadcaster.SubscriberCount;
+            var active = safety.ScreenShareAllowed && subscriberCount > 0;
             if (active)
             {
-                var source = EnsureSource();
-                if (source is { IsAvailable: true })
+                if (subscriberCount > _lastSubscriberCount) RequestKeyframe();
+                _lastSubscriberCount = subscriberCount;
+
+                var (source, encoder) = EnsureCapture();
+                if (source is { IsAvailable: true } && encoder is not null)
                 {
                     try
                     {
                         if (source.TryCaptureFrame(out var captured))
                         {
-                            var jpegBytes = ScreenFrameEncoder.EncodeJpeg(captured, options.ScreenStream.MaxWidth, options.ScreenStream.JpegQuality);
-                            var frame = new ScreenFrame(
-                                sequence.Next(),
-                                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                                Math.Min(captured.Width, options.ScreenStream.MaxWidth),
-                                captured.Width > options.ScreenStream.MaxWidth
-                                    ? (int)Math.Round(captured.Height * (options.ScreenStream.MaxWidth / (double)captured.Width))
-                                    : captured.Height,
-                                jpegBytes);
-                            broadcaster.Publish(frame);
+                            var encoded = encoder.Encode(captured);
+                            if (encoded is { } result)
+                            {
+                                var frame = new ScreenFrame(
+                                    sequence.Next(),
+                                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                    Math.Min(captured.Width, options.ScreenStream.MaxWidth),
+                                    captured.Width > options.ScreenStream.MaxWidth
+                                        ? (int)Math.Round(captured.Height * (options.ScreenStream.MaxWidth / (double)captured.Width))
+                                        : captured.Height,
+                                    result.IsKeyframe,
+                                    result.AnnexB);
+                                broadcaster.Publish(frame);
+                            }
                         }
                     }
                     catch (Exception error) when (IsRecoverableCaptureFailure(error))
@@ -85,11 +103,8 @@ public sealed class ScreenStreamService(
             }
             else
             {
-                lock (_modeGate)
-                {
-                    _source?.Dispose();
-                    _source = null;
-                }
+                _lastSubscriberCount = 0;
+                lock (_modeGate) TearDownCaptureLocked();
             }
 
             var delay = active
@@ -101,35 +116,63 @@ public sealed class ScreenStreamService(
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        lock (_modeGate)
-        {
-            _source?.Dispose();
-            _source = null;
-        }
+        lock (_modeGate) TearDownCaptureLocked();
         await base.StopAsync(cancellationToken);
     }
 
-    private IScreenCaptureSource? EnsureSource()
+    private (IScreenCaptureSource? Source, H264Encoder? Encoder) EnsureCapture()
     {
         lock (_modeGate)
         {
-            if (_source is not null) return _source;
-            if (_activeMode is not { } mode) return null;
-            var deviceName = mode == ScreenStreamMode.Mirror
-                ? options.ScreenStream.MirrorMonitorDeviceName
-                : options.ScreenStream.ExtendMonitorDeviceName ?? extendMonitorLocator.TryResolveDeviceName();
-            try
+            if (_activeMode is not { } mode) return (null, null);
+
+            if (_source is null)
             {
-                _source = sourceFactory.Create(deviceName);
+                var deviceName = mode == ScreenStreamMode.Mirror
+                    ? options.ScreenStream.MirrorMonitorDeviceName
+                    : options.ScreenStream.ExtendMonitorDeviceName ?? extendMonitorLocator.TryResolveDeviceName();
+                try
+                {
+                    _source = sourceFactory.Create(deviceName);
+                }
+                catch (Exception error) when (IsRecoverableCaptureFailure(error))
+                {
+                    logger.LogWarning("Failed to start screen capture for {Mode} mode: {Message}", mode, error.Message);
+                    return (null, null);
+                }
             }
-            catch (Exception error) when (IsRecoverableCaptureFailure(error))
+
+            if (_encoder is null && _source is { IsAvailable: true } source)
             {
-                logger.LogWarning("Failed to start screen capture for {Mode} mode: {Message}", mode, error.Message);
-                return null;
+                try
+                {
+                    // Probe a frame to learn the real capture dimensions before sizing the encoder.
+                    if (!source.TryCaptureFrame(out var probe)) return (_source, null);
+                    var scale = Math.Min(1.0, options.ScreenStream.MaxWidth / (double)probe.Width);
+                    var width = EvenDimension((int)Math.Round(probe.Width * scale));
+                    var height = EvenDimension((int)Math.Round(probe.Height * scale));
+                    _encoder = new H264Encoder(width, height, options.ScreenStream.TargetFps, options.ScreenStream.BitrateKbps * 1000);
+                }
+                catch (Exception error) when (IsRecoverableCaptureFailure(error))
+                {
+                    logger.LogWarning("Failed to start the H.264 encoder: {Message}", error.Message);
+                    return (_source, null);
+                }
             }
-            return _source;
+
+            return (_source, _encoder);
         }
     }
+
+    private void TearDownCaptureLocked()
+    {
+        _encoder?.Dispose();
+        _encoder = null;
+        _source?.Dispose();
+        _source = null;
+    }
+
+    private static int EvenDimension(int value) => value % 2 == 0 ? value : value - 1;
 
     private static bool IsRecoverableCaptureFailure(Exception error) => error is
         InvalidOperationException or

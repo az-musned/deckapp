@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -9,14 +10,14 @@ struct FullScreenScreenMirrorView: View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
 
-            if let image = store.latestFrame {
-                ScreenMirrorFrameView(image: image, contentsGravity: store.mode == .extend ? .resize : .resizeAspect)
+            if store.hasReceivedFrame {
+                ScreenMirrorFrameView(displayLayer: store.displayLayer, videoGravity: store.mode == .extend ? .resize : .resizeAspect)
                     .ignoresSafeArea()
             } else {
                 statusOverlay
             }
 
-            if store.latestFrame != nil, store.isStale || store.connectionState != .connected {
+            if store.hasReceivedFrame, store.isStale || store.connectionState != .connected {
                 staleBanner
             }
 
@@ -59,19 +60,39 @@ struct FullScreenScreenMirrorView: View {
     }
 }
 
-private struct ScreenMirrorFrameView: UIViewRepresentable {
-    let image: CGImage
-    let contentsGravity: CALayerContentsGravity
+/// Hosts `ScreenMirrorStore.displayLayer` (the same instance the store enqueues decoded
+/// frames onto) as a sublayer, keeping its frame in sync via `layoutSubviews`. Frames are
+/// enqueued on the store's layer instance directly -- creating a fresh layer here (e.g. via
+/// a `layerClass` override) would enqueue onto a layer nothing ever displays.
+private final class ScreenMirrorHostView: UIView {
+    private let displayLayer: AVSampleBufferDisplayLayer
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .black
-        view.layer.contentsGravity = contentsGravity
-        return view
+    init(displayLayer: AVSampleBufferDisplayLayer) {
+        self.displayLayer = displayLayer
+        super.init(frame: .zero)
+        backgroundColor = .black
+        displayLayer.removeFromSuperlayer()
+        layer.addSublayer(displayLayer)
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        uiView.layer.contentsGravity = contentsGravity
-        uiView.layer.contents = image
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        displayLayer.frame = bounds
+    }
+}
+
+private struct ScreenMirrorFrameView: UIViewRepresentable {
+    let displayLayer: AVSampleBufferDisplayLayer
+    let videoGravity: AVLayerVideoGravity
+
+    func makeUIView(context: Context) -> ScreenMirrorHostView {
+        ScreenMirrorHostView(displayLayer: displayLayer)
+    }
+
+    func updateUIView(_ uiView: ScreenMirrorHostView, context: Context) {
+        displayLayer.videoGravity = videoGravity
     }
 }

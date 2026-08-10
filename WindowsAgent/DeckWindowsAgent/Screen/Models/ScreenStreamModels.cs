@@ -11,7 +11,8 @@ public sealed record ScreenFrame(
     long TimestampMilliseconds,
     int Width,
     int Height,
-    byte[] JpegBytes);
+    bool IsKeyframe,
+    byte[] Payload);
 
 public sealed record ScreenStreamHello(
     string Type,
