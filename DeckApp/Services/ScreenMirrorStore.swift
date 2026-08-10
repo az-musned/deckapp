@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import Observation
 
@@ -22,6 +23,20 @@ final class ScreenMirrorStore {
     init(mode: ScreenMirrorMode, client: any ScreenMirrorServing = ScreenMirrorClient()) {
         self.mode = mode
         self.client = client
+        Self.configureRealtimeTimebase(for: displayLayer)
+    }
+
+    /// Frames are stamped with the host clock at decode time (see ScreenMirrorDecoder), not a
+    /// timestamp from the PC. AVSampleBufferDisplayLayer schedules display against its own
+    /// controlTimebase, which defaults to something unrelated to that clock -- without this,
+    /// display timing was effectively arbitrary, showing up as frames appearing out of order.
+    private static func configureRealtimeTimebase(for layer: AVSampleBufferDisplayLayer) {
+        var timebase: CMTimebase?
+        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
+        guard let timebase else { return }
+        CMTimebaseSetTime(timebase, time: CMClockGetTime(CMClockGetHostTimeClock()))
+        CMTimebaseSetRate(timebase, rate: 1.0)
+        layer.controlTimebase = timebase
     }
 
     func attach(controller: RemoteInputController) { self.controller = controller }

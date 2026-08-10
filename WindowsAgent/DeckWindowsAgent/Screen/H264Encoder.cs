@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
+using SkiaSharp;
 using Vortice.MediaFoundation;
 
 namespace DeckWindowsAgent.Screen;
@@ -71,13 +72,13 @@ public sealed class H264Encoder : IDisposable
     {
         var nv12 = BgraToNv12(frame, _width, _height);
 
-        var buffer = MediaFactory.MFCreateMemoryBuffer(nv12.Length);
+        using var buffer = MediaFactory.MFCreateMemoryBuffer(nv12.Length);
         buffer.Lock(out var destination, out _, out _);
         Marshal.Copy(nv12, 0, destination, nv12.Length);
         buffer.Unlock();
         buffer.CurrentLength = nv12.Length;
 
-        var sample = MediaFactory.MFCreateSample();
+        using var sample = MediaFactory.MFCreateSample();
         sample.AddBuffer(buffer);
         sample.SampleTime = _sampleTime;
         sample.SampleDuration = _sampleDuration;
@@ -109,15 +110,22 @@ public sealed class H264Encoder : IDisposable
         while (true)
         {
             var outputInfo = _transform.GetOutputStreamInfo(0);
-            var outputBuffer = MediaFactory.MFCreateMemoryBuffer(Math.Max(outputInfo.Size, 1));
-            var outputSample = MediaFactory.MFCreateSample();
+            using var outputBuffer = MediaFactory.MFCreateMemoryBuffer(Math.Max(outputInfo.Size, 1));
+            using var outputSample = MediaFactory.MFCreateSample();
             outputSample.AddBuffer(outputBuffer);
             var dataBuffer = new OutputDataBuffer { StreamID = 0, Sample = outputSample };
 
             var result = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref dataBuffer, out _);
+            // Deliberately not disposing dataBuffer.Sample separately from outputSample here:
+            // reading it back off the struct constructs a fresh SharpGen wrapper around the
+            // same underlying COM object, and disposing that second wrapper throws off the
+            // reference count in a way that leaks native memory (~3-4MB/frame, confirmed by
+            // isolated testing) rather than double-freeing. outputSample's own disposal is
+            // sufficient for this MFT, which fills the sample we provide rather than
+            // allocating its own (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES not set).
             if (result.Failure) return;
 
-            var contiguous = dataBuffer.Sample.ConvertToContiguousBuffer();
+            using var contiguous = dataBuffer.Sample.ConvertToContiguousBuffer();
             contiguous.Lock(out var source, out _, out var currentLength);
             var chunk = new byte[currentLength];
             Marshal.Copy(source, chunk, 0, currentLength);
@@ -142,49 +150,72 @@ public sealed class H264Encoder : IDisposable
 
     private static byte[] BgraToNv12(in CapturedFrame frame, int targetWidth, int targetHeight)
     {
+        byte[] source;
+        int sourceStride;
+
+        if (frame.Width == targetWidth && frame.Height == targetHeight)
+        {
+            source = frame.Bgra;
+            sourceStride = frame.Stride;
+        }
+        else
+        {
+            // Scale natively via Skia rather than nearest-index sampling into the original
+            // buffer -- sampling with clamped source indices only ever reads the top-left
+            // region when downscaling, which crops the image instead of resizing it.
+            var sourceInfo = new SKImageInfo(frame.Width, frame.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var sourceImage = SKImage.FromPixelCopy(sourceInfo, frame.Bgra, frame.Stride);
+            using var sourceBitmap = SKBitmap.FromImage(sourceImage);
+            using var resized = sourceBitmap.Resize(
+                new SKImageInfo(targetWidth, targetHeight, SKColorType.Bgra8888, SKAlphaType.Premul),
+                SKSamplingOptions.Default);
+            if (resized is null) return new byte[targetWidth * targetHeight * 3 / 2];
+            source = resized.Bytes;
+            sourceStride = resized.RowBytes;
+        }
+
         var ySize = targetWidth * targetHeight;
         var nv12 = new byte[ySize + ySize / 2];
-        var bgra = frame.Bgra;
-        var stride = frame.Stride;
+        var uvWidth = targetWidth / 2;
+        var uvOffset = ySize;
 
-        for (var y = 0; y < targetHeight; y++)
+        Parallel.For(0, targetHeight / 2, uvRow =>
         {
-            var sourceRow = Math.Min(y, frame.Height - 1) * stride;
+            var y0 = uvRow * 2;
+            var y1 = y0 + 1;
+            var yRow0Offset = y0 * targetWidth;
+            var yRow1Offset = y1 * targetWidth;
+            var sourceRow0 = y0 * sourceStride;
+            var sourceRow1 = y1 * sourceStride;
+
             for (var x = 0; x < targetWidth; x++)
             {
-                var sourceColumn = Math.Min(x, frame.Width - 1) * 4;
-                var offset = sourceRow + sourceColumn;
-                if (offset + 2 >= bgra.Length) continue;
-                byte b = bgra[offset];
-                byte g = bgra[offset + 1];
-                byte r = bgra[offset + 2];
-                nv12[y * targetWidth + x] = (byte)Math.Clamp(0.299 * r + 0.587 * g + 0.114 * b, 0, 255);
+                var sourceColumn = x * 4;
+                WriteLuma(source, sourceRow0 + sourceColumn, nv12, yRow0Offset + x);
+                WriteLuma(source, sourceRow1 + sourceColumn, nv12, yRow1Offset + x);
             }
-        }
 
-        var uvWidth = targetWidth / 2;
-        var uvHeight = targetHeight / 2;
-        var uvOffset = ySize;
-        for (var y = 0; y < uvHeight; y++)
-        {
-            var sourceRow = Math.Min(y * 2, frame.Height - 1) * stride;
-            for (var x = 0; x < uvWidth; x++)
+            for (var uvX = 0; uvX < uvWidth; uvX++)
             {
-                var sourceColumn = Math.Min(x * 2, frame.Width - 1) * 4;
-                var offset = sourceRow + sourceColumn;
-                if (offset + 2 >= bgra.Length) continue;
-                byte b = bgra[offset];
-                byte g = bgra[offset + 1];
-                byte r = bgra[offset + 2];
-                var u = Math.Clamp(-0.169 * r - 0.331 * g + 0.5 * b + 128, 0, 255);
-                var v = Math.Clamp(0.5 * r - 0.419 * g - 0.081 * b + 128, 0, 255);
-                var pairIndex = uvOffset + (y * uvWidth + x) * 2;
-                nv12[pairIndex] = (byte)u;
-                nv12[pairIndex + 1] = (byte)v;
+                var offset = sourceRow0 + uvX * 2 * 4;
+                if (offset + 2 >= source.Length) continue;
+                int b = source[offset], g = source[offset + 1], r = source[offset + 2];
+                var u = (byte)Math.Clamp((-38 * r - 74 * g + 112 * b + 128 * 256) >> 8, 0, 255);
+                var v = (byte)Math.Clamp((112 * r - 94 * g - 18 * b + 128 * 256) >> 8, 0, 255);
+                var pairIndex = uvOffset + (uvRow * uvWidth + uvX) * 2;
+                nv12[pairIndex] = u;
+                nv12[pairIndex + 1] = v;
             }
-        }
+        });
 
         return nv12;
+
+        static void WriteLuma(byte[] source, int offset, byte[] destination, int destinationIndex)
+        {
+            if (offset + 2 >= source.Length) return;
+            int b = source[offset], g = source[offset + 1], r = source[offset + 2];
+            destination[destinationIndex] = (byte)Math.Clamp((66 * r + 129 * g + 25 * b + 16 * 256) >> 8, 0, 255);
+        }
     }
 
     public void Dispose()

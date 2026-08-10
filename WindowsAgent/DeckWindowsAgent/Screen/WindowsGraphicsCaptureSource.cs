@@ -19,6 +19,8 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
     private readonly GraphicsCaptureSession _session;
     private readonly object _gate = new();
     private bool _disposed;
+    private ID3D11Texture2D? _stagingTexture;
+    private Texture2DDescription _stagingDescription;
 
     public WindowsGraphicsCaptureSource(string? deviceName, ILogger<WindowsGraphicsCaptureSource> logger)
     {
@@ -59,34 +61,46 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
             if (captured is null) return false;
 
             var access = captured.Surface.As<IDirect3DDxgiInterfaceAccess>();
-            var textureIid = typeof(ID3D11Texture2D).GUID;
-            var texturePointer = access.GetInterface(ref textureIid);
-            using var texture = new ID3D11Texture2D(texturePointer);
-            var description = texture.Description;
-
-            var stagingDescription = description with
-            {
-                Usage = ResourceUsage.Staging,
-                BindFlags = BindFlags.None,
-                CPUAccessFlags = CpuAccessFlags.Read,
-                MiscFlags = ResourceOptionFlags.None,
-            };
-
-            using var staging = _device.CreateTexture2D(stagingDescription);
-            _context.CopyResource(staging, texture);
-
-            var mapped = _context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
             try
             {
-                var rowPitch = (int)mapped.RowPitch;
-                var bytes = new byte[rowPitch * (int)description.Height];
-                Marshal.Copy(mapped.DataPointer, bytes, 0, bytes.Length);
-                frame = new CapturedFrame((int)description.Width, (int)description.Height, rowPitch, bytes);
-                return true;
+                var textureIid = typeof(ID3D11Texture2D).GUID;
+                var texturePointer = access.GetInterface(ref textureIid);
+                using var texture = new ID3D11Texture2D(texturePointer);
+                var description = texture.Description;
+
+                var stagingDescription = description with
+                {
+                    Usage = ResourceUsage.Staging,
+                    BindFlags = BindFlags.None,
+                    CPUAccessFlags = CpuAccessFlags.Read,
+                    MiscFlags = ResourceOptionFlags.None,
+                };
+
+                // Creating a fresh staging texture every captured frame churns GPU-visible
+                // resources faster than the driver reliably reclaims them, which shows up as
+                // steadily growing private memory that .NET's GC can't see or collect (the
+                // managed wrapper is disposed correctly each time; the underlying driver
+                // allocation lags behind). Reuse one sized to the current capture instead.
+                var staging = EnsureStagingTexture(stagingDescription);
+                _context.CopyResource(staging, texture);
+
+                var mapped = _context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+                try
+                {
+                    var rowPitch = (int)mapped.RowPitch;
+                    var bytes = new byte[rowPitch * (int)description.Height];
+                    Marshal.Copy(mapped.DataPointer, bytes, 0, bytes.Length);
+                    frame = new CapturedFrame((int)description.Width, (int)description.Height, rowPitch, bytes);
+                    return true;
+                }
+                finally
+                {
+                    _context.Unmap(staging, 0);
+                }
             }
             finally
             {
-                _context.Unmap(staging, 0);
+                if (Marshal.IsComObject(access)) Marshal.ReleaseComObject(access);
             }
         }
     }
@@ -97,12 +111,29 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
         _disposed = true;
         lock (_gate)
         {
+            _stagingTexture?.Dispose();
             _session.Dispose();
             _framePool.Dispose();
             _direct3DDevice.Dispose();
             _context.Dispose();
             _device.Dispose();
         }
+    }
+
+    private ID3D11Texture2D EnsureStagingTexture(Texture2DDescription description)
+    {
+        if (_stagingTexture is not null
+            && _stagingDescription.Width == description.Width
+            && _stagingDescription.Height == description.Height
+            && _stagingDescription.Format == description.Format)
+        {
+            return _stagingTexture;
+        }
+
+        _stagingTexture?.Dispose();
+        _stagingTexture = _device.CreateTexture2D(description);
+        _stagingDescription = description;
+        return _stagingTexture;
     }
 
     private static IntPtr ResolveMonitor(string? deviceName, ILogger<WindowsGraphicsCaptureSource> logger)
