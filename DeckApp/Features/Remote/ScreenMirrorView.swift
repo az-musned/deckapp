@@ -11,7 +11,14 @@ struct FullScreenScreenMirrorView: View {
             Color.black.ignoresSafeArea()
 
             if store.hasReceivedFrame {
-                ScreenMirrorFrameView(displayLayer: store.displayLayer, videoGravity: store.mode == .extend ? .resize : .resizeAspect)
+                // Both modes preserve aspect ratio. Extend mode used `.resize` (fill the
+                // screen, no aspect correction) to match a virtual monitor configured for
+                // landscape, with a forced orientation lock to keep it from distorting in
+                // portrait -- but forcing UIWindowScene.requestGeometryUpdate at the moment a
+                // fullScreenCover is presenting conflicts with the presentation transition
+                // itself and made the view dismiss on open. Letterboxing when the device
+                // orientation doesn't match the virtual monitor's is the safer trade-off.
+                ScreenMirrorFrameView(displayLayer: store.displayLayer, videoGravity: .resizeAspect)
                     .ignoresSafeArea()
             } else {
                 statusOverlay
@@ -30,34 +37,11 @@ struct FullScreenScreenMirrorView: View {
             .padding()
         }
         .task {
-            if store.mode == .extend { lockToLandscape() }
             await store.startMirroring()
         }
         .onDisappear {
-            if store.mode == .extend { unlockOrientation() }
             Task { await store.stopMirroring() }
         }
-    }
-
-    // A virtual monitor is a fixed-orientation display, set up per the extend-mode setup
-    // guide at the iPad's native landscape resolution -- `.resize` (no aspect correction,
-    // by design, to fill the whole screen) will visibly stretch that content if the device
-    // is simply rotated to portrait while viewing it.
-    private func lockToLandscape() {
-        AppDelegate.orientationLock = .landscape
-        requestGeometryUpdate(interfaceOrientations: .landscape)
-    }
-
-    private func unlockOrientation() {
-        AppDelegate.orientationLock = nil
-        requestGeometryUpdate(interfaceOrientations: .all)
-    }
-
-    private func requestGeometryUpdate(interfaceOrientations mask: UIInterfaceOrientationMask) {
-        guard let windowScene = UIApplication.shared.connectedScenes
-            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene else { return }
-        let preferences = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)
-        windowScene.requestGeometryUpdate(preferences) { _ in }
     }
 
     private var statusOverlay: some View {
