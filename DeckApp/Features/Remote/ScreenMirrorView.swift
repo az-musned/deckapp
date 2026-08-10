@@ -7,19 +7,38 @@ struct FullScreenScreenMirrorView: View {
     let store: ScreenMirrorStore
 
     var body: some View {
+        GeometryReader { proxy in
+            // The iPhone interface is locked to portrait (see Info.plist) specifically so
+            // rotating the device never changes RootView's width-driven layout -- which was
+            // tearing down this very view's presentation. The desktop/virtual-monitor content
+            // is landscape-shaped regardless, so when the available space is portrait-shaped
+            // (always true on a locked iPhone, never true on an iPad, which still rotates
+            // natively), rotate the whole stream canvas 90° instead: the user turns their
+            // phone sideways to view it, the interface orientation itself never moves.
+            let isPortraitSpace = proxy.size.width < proxy.size.height
+            streamContent
+                .frame(
+                    width: isPortraitSpace ? proxy.size.height : proxy.size.width,
+                    height: isPortraitSpace ? proxy.size.width : proxy.size.height
+                )
+                .rotationEffect(.degrees(isPortraitSpace ? 90 : 0))
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .task {
+            await store.startMirroring()
+        }
+        .onDisappear {
+            Task { await store.stopMirroring() }
+        }
+    }
+
+    private var streamContent: some View {
         ZStack(alignment: .topLeading) {
-            Color.black.ignoresSafeArea()
+            Color.black
 
             if store.hasReceivedFrame {
-                // Both modes preserve aspect ratio. Extend mode used `.resize` (fill the
-                // screen, no aspect correction) to match a virtual monitor configured for
-                // landscape, with a forced orientation lock to keep it from distorting in
-                // portrait -- but forcing UIWindowScene.requestGeometryUpdate at the moment a
-                // fullScreenCover is presenting conflicts with the presentation transition
-                // itself and made the view dismiss on open. Letterboxing when the device
-                // orientation doesn't match the virtual monitor's is the safer trade-off.
                 ScreenMirrorFrameView(displayLayer: store.displayLayer, videoGravity: .resizeAspect)
-                    .ignoresSafeArea()
             } else {
                 statusOverlay
             }
@@ -35,12 +54,6 @@ struct FullScreenScreenMirrorView: View {
             .buttonStyle(.plain)
             .glassSurface(.elevated, cornerRadius: 999)
             .padding()
-        }
-        .task {
-            await store.startMirroring()
-        }
-        .onDisappear {
-            Task { await store.stopMirroring() }
         }
     }
 
