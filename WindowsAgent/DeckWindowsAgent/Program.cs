@@ -169,8 +169,6 @@ app.MapDiscordWebSocket();
 
 app.Run();
 
-internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
-
 static bool TryAuthenticate(HttpContext context, PairingService pairing)
 {
     var token = BearerToken(context);
@@ -185,3 +183,5 @@ static string? BearerToken(HttpContext context)
         ? authorization[prefix.Length..].Trim()
         : null;
 }
+
+internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
