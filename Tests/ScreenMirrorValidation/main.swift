@@ -4,11 +4,12 @@ import Foundation
 struct ScreenMirrorValidation {
     static func main() throws {
         var tracker = ScreenStreamSequenceTracker()
-        precondition(tracker.accepts(10))
-        precondition(!tracker.accepts(9) && !tracker.accepts(10))
-        precondition(tracker.accepts(11))
+        precondition(tracker.accepts(10) == (true, false))
+        precondition(tracker.accepts(9) == (false, false) && tracker.accepts(10) == (false, false))
+        precondition(tracker.accepts(11) == (true, false), "Consecutive sequence numbers must not be flagged as a gap.")
+        precondition(tracker.accepts(15) == (true, true), "A skipped sequence range must be flagged as a gap.")
         tracker.reset()
-        precondition(tracker.accepts(0), "Sequence zero must be accepted after reconnect.")
+        precondition(tracker.accepts(0) == (true, false), "Sequence zero must be accepted after reconnect, and not flagged as a gap.")
 
         let helloJSON = #"{"type":"screen.hello","width":1920,"height":1080,"fps":30,"format":"h264","protocolVersion":1,"mode":"mirror"}"#
         let hello = try JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: Data(helloJSON.utf8))

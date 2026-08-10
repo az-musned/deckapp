@@ -19,7 +19,15 @@ public sealed class ScreenStreamBroadcaster(AgentOptions options)
             if (_subscribers.Count >= _maximumClients)
                 throw new InvalidOperationException("The maximum number of screen mirror clients is connected.");
             var id = Guid.NewGuid();
-            var channel = Channel.CreateBounded<ScreenFrame>(new BoundedChannelOptions(1)
+            // Capacity > 1 (unlike the audio-meter broadcaster this was modeled on) is
+            // deliberate: H.264 delta frames are differential, so dropping one mid-GOP
+            // breaks the decoder's reference chain until the next keyframe. A small buffer
+            // absorbs brief backpressure (e.g. a slow send of a large keyframe) without
+            // needing to drop a frame the decode chain still depends on. Still bounded and
+            // still drops under sustained backpressure -- the client detects the resulting
+            // sequence gap and requests a fresh keyframe to resync (see
+            // ScreenStreamSequenceTracker.accepts on the Swift side).
+            var channel = Channel.CreateBounded<ScreenFrame>(new BoundedChannelOptions(4)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
