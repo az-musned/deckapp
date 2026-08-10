@@ -158,7 +158,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
             guard case .data(let data) = received,
                   let wireFrame = ScreenStreamWireFrameParser.parse(data),
                   sequenceTracker.accepts(wireFrame.sequence) else { continue }
-            guard let sampleBuffer = decoder.decode(wireFrame) else { continue }
+            guard let sampleBuffer = await decoder.decode(wireFrame) else { continue }
             if !announcedConnected {
                 state(.connected)
                 announcedConnected = true

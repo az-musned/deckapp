@@ -30,11 +30,34 @@ struct FullScreenScreenMirrorView: View {
             .padding()
         }
         .task {
+            if store.mode == .extend { lockToLandscape() }
             await store.startMirroring()
         }
         .onDisappear {
+            if store.mode == .extend { unlockOrientation() }
             Task { await store.stopMirroring() }
         }
+    }
+
+    // A virtual monitor is a fixed-orientation display, set up per the extend-mode setup
+    // guide at the iPad's native landscape resolution -- `.resize` (no aspect correction,
+    // by design, to fill the whole screen) will visibly stretch that content if the device
+    // is simply rotated to portrait while viewing it.
+    private func lockToLandscape() {
+        AppDelegate.orientationLock = .landscape
+        requestGeometryUpdate(interfaceOrientations: .landscape)
+    }
+
+    private func unlockOrientation() {
+        AppDelegate.orientationLock = nil
+        requestGeometryUpdate(interfaceOrientations: .all)
+    }
+
+    private func requestGeometryUpdate(interfaceOrientations mask: UIInterfaceOrientationMask) {
+        guard let windowScene = UIApplication.shared.connectedScenes
+            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene else { return }
+        let preferences = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)
+        windowScene.requestGeometryUpdate(preferences) { _ in }
     }
 
     private var statusOverlay: some View {
@@ -71,6 +94,10 @@ private final class ScreenMirrorHostView: UIView {
         self.displayLayer = displayLayer
         super.init(frame: .zero)
         backgroundColor = .black
+        // This view has nothing of its own to handle touches for -- it's a passive video
+        // surface. Left enabled (the UIView default), it swallows every touch in its bounds,
+        // including the SwiftUI close button layered on top of it in the ZStack.
+        isUserInteractionEnabled = false
         displayLayer.removeFromSuperlayer()
         layer.addSublayer(displayLayer)
     }

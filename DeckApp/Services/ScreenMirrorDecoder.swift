@@ -6,6 +6,15 @@ import VideoToolbox
 /// `CMSampleBuffer`s. Scoped to a single WebSocket connection -- construct a fresh instance
 /// per `ScreenMirrorClient.receiveStream` call, mirroring the existing per-connection
 /// `ScreenStreamSequenceTracker` pattern.
+/// `CVImageBuffer` predates Swift's Sendable checking. This box carries one across the
+/// `withCheckedContinuation` resume boundary in `decode(_:)` -- safe because it's a
+/// single-owner handoff from VideoToolbox's callback to whichever task is awaiting it, never
+/// touched concurrently by both sides.
+private nonisolated struct ImageBufferBox: @unchecked Sendable {
+    let value: CVImageBuffer?
+    init(_ value: CVImageBuffer?) { self.value = value }
+}
+
 nonisolated final class ScreenMirrorDecoder {
     private var session: VTDecompressionSession?
     private var formatDescription: CMVideoFormatDescription?
@@ -14,7 +23,7 @@ nonisolated final class ScreenMirrorDecoder {
     /// Returns a ready-to-display sample buffer, or nil if this access unit didn't produce
     /// one (e.g. a non-keyframe arrived before the session has been configured from SPS/PPS,
     /// which can happen briefly right after connecting until the requested keyframe arrives).
-    func decode(_ wireFrame: ScreenStreamWireFrame) -> CMSampleBuffer? {
+    func decode(_ wireFrame: ScreenStreamWireFrame) async -> CMSampleBuffer? {
         let nalUnits = Self.splitAnnexB(wireFrame.annexB)
         var sliceNalUnits: [Data] = []
         var sps: Data?
@@ -63,26 +72,27 @@ nonisolated final class ScreenMirrorDecoder {
         )
         guard createStatus == noErr, let sourceSampleBuffer else { return nil }
 
-        // `nonisolated(unsafe)` because the completion handler below can run on a
-        // VideoToolbox-owned queue rather than wherever `decode` was called from. That's
-        // safe here specifically because `VTDecompressionSessionWaitForAsynchronousFrames`
-        // (called immediately after) blocks until the handler has already run, giving this
-        // write a real ordering guarantee the compiler just can't see from the API's shape.
-        nonisolated(unsafe) var decodedImageBuffer: CVImageBuffer?
-        let decodeStatus = VTDecompressionSessionDecodeFrame(
-            session,
-            sampleBuffer: sourceSampleBuffer,
-            flags: [],
-            infoFlagsOut: nil
-        ) { status, _, imageBuffer, _, _ in
-            guard status == noErr else { return }
-            decodedImageBuffer = imageBuffer
-        }
-        // The output callback above can fire asynchronously on VideoToolbox's own queue --
-        // without this, `decodedImageBuffer` is read before the callback is guaranteed to
-        // have run, which would intermittently (and non-deterministically) drop frames.
-        VTDecompressionSessionWaitForAsynchronousFrames(session)
-        guard decodeStatus == noErr, let decodedImageBuffer else { return nil }
+        // The completion handler can fire asynchronously on a VideoToolbox-owned queue rather
+        // than wherever `decode` was called from. A checked continuation makes that a real
+        // `await` instead of blocking this thread for every single frame with
+        // `VTDecompressionSessionWaitForAsynchronousFrames` (which serializes decoding and
+        // gives up whatever pipelining the hardware decoder would otherwise do). VideoToolbox
+        // only invokes the handler when `VTDecompressionSessionDecodeFrame` itself reports
+        // success, so there's no double-resume risk on the synchronous failure path.
+        let decodedImageBuffer: CVImageBuffer? = await withCheckedContinuation { continuation in
+            let decodeStatus = VTDecompressionSessionDecodeFrame(
+                session,
+                sampleBuffer: sourceSampleBuffer,
+                flags: [],
+                infoFlagsOut: nil
+            ) { status, _, imageBuffer, _, _ in
+                continuation.resume(returning: ImageBufferBox(status == noErr ? imageBuffer : nil))
+            }
+            if decodeStatus != noErr {
+                continuation.resume(returning: ImageBufferBox(nil))
+            }
+        }.value
+        guard let decodedImageBuffer else { return nil }
 
         var outputFormatDescription: CMVideoFormatDescription?
         CMVideoFormatDescriptionCreateForImageBuffer(

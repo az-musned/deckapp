@@ -3,6 +3,7 @@ import SwiftData
 
 @main
 struct DeckApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
     private let modelContainer: ModelContainer
 
