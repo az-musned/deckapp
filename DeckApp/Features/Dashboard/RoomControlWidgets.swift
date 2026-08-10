@@ -31,6 +31,10 @@ struct RoomControlWidgetView: View {
             RemoteInputLauncherWidget(definition: definition)
         case .screenMirror:
             ScreenMirrorLauncherWidget(definition: definition)
+        case .spotify:
+            MockSpotifyWidget(definition: definition, compact: compact)
+        case .discord:
+            DiscordWidget(definition: definition, compact: compact)
         }
     }
 }
@@ -854,6 +858,457 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct MockSpotifyWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: appState.mockRoomControl.spotify.availability)
+
+            HStack(spacing: DesignToken.Spacing.medium) {
+                GlassIcon(symbol: track.artworkSymbol, tint: DesignToken.Color.positive, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("\(track.artist) — \(track.album)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                likeButton
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView(value: progress.current, total: progress.total)
+                    .tint(DesignToken.Color.positive)
+                HStack {
+                    Text(formatted(progress.current)).font(.caption2.monospacedDigit())
+                    Spacer()
+                    Text(formatted(progress.total)).font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: DesignToken.Spacing.large) {
+                Spacer()
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: false) }
+                } label: {
+                    Image(systemName: "backward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Task { await appState.toggleSpotifyPlayback() }
+                } label: {
+                    Image(systemName: appState.mockRoomControl.spotify.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.positive.opacity(0.22), interactive: true)
+
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: true) }
+                } label: {
+                    Image(systemName: "forward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+
+            addToPlaylistMenu
+        }
+    }
+
+    private var track: MockSpotifyTrack { appState.mockRoomControl.spotify.currentTrack }
+
+    private var progress: (current: Double, total: Double) {
+        (min(appState.mockRoomControl.spotify.progressSeconds, track.durationSeconds), track.durationSeconds)
+    }
+
+    private func formatted(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var isLiked: Bool {
+        appState.mockRoomControl.spotify.isLiked(track.id)
+    }
+
+    private var likeButton: some View {
+        Button {
+            Task { await appState.toggleSpotifyLike() }
+        } label: {
+            Image(systemName: isLiked ? "heart.fill" : "heart")
+                .foregroundStyle(isLiked ? DesignToken.Color.destructive : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.subtle, cornerRadius: 999, tint: isLiked ? DesignToken.Color.destructive.opacity(0.16) : Color.clear)
+        .accessibilityLabel(isLiked ? "Unlike" : "Like")
+    }
+
+    private var addToPlaylistMenu: some View {
+        Menu {
+            ForEach(appState.mockRoomControl.spotify.playlists) { playlist in
+                Button {
+                    Task { await appState.toggleCurrentSpotifyTrack(inPlaylistID: playlist.id) }
+                } label: {
+                    if playlist.trackIDs.contains(track.id) {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text(playlist.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.16), interactive: true)
+    }
+}
+
+private struct DiscordWidget: View {
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        if definition.backend.backend == .windowsAgent {
+            LiveDiscordWidget(definition: definition, compact: compact)
+        } else {
+            MockDiscordWidget(definition: definition, compact: compact)
+        }
+    }
+}
+
+private struct LiveDiscordWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+    @State private var showingHotkeyPicker = false
+
+    private var store: DiscordStore { appState.remoteInput.discord }
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: store.bridgeState == .ready ? .available : .unavailable)
+
+            switch store.bridgeState {
+            case .notConfigured:
+                Label("Set Discord Client ID/Secret on the PC to enable this widget.", systemImage: "gearshape.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .disconnected, .connectingToClient, .authenticating:
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ProgressView().controlSize(.small)
+                    Text(store.bridgeState.title).font(.caption).foregroundStyle(.secondary)
+                }
+            case .awaitingAuthorization:
+                Label("Approve the Discord prompt on your PC.", systemImage: "checkmark.shield.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .ready:
+                readyContent
+            }
+
+            if let lastError = store.lastError, store.bridgeState == .ready {
+                Text(lastError).font(.caption2).foregroundStyle(DesignToken.Color.destructive)
+            }
+        }
+        .task {
+            await store.startWatching()
+            do { try await Task.sleep(for: .seconds(86_400)) } catch { }
+            await store.stopWatching()
+        }
+        .sheet(isPresented: $showingHotkeyPicker) {
+            HotkeyPickerView(combo: appState.discordScreenShareHotkey) { combo in
+                appState.setDiscordScreenShareHotkey(combo)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var readyContent: some View {
+        voiceStatusRow
+        HStack(spacing: DesignToken.Spacing.small) {
+            controlButton(title: "Mute", symbol: "mic.fill", isActive: store.voice.selfMute) {
+                Task { await store.toggleMute() }
+            }
+            controlButton(title: "Deafen", symbol: "headphones", isActive: store.voice.selfDeaf) {
+                Task { await store.toggleDeafen() }
+            }
+            screenShareButton
+            joinLeaveButton
+        }
+    }
+
+    private var voiceStatusRow: some View {
+        HStack(spacing: DesignToken.Spacing.small) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.voice.isConnected ? (store.voice.channelName ?? "Voice Channel") : "Not connected")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                if store.voice.isConnected {
+                    Text("\(store.voice.participants.count) in voice")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if store.voice.isConnected {
+                HStack(spacing: -6) {
+                    ForEach(store.voice.participants.prefix(4)) { participant in
+                        Text(String(participant.username.prefix(2)).uppercased())
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Color.controlDeckTint(named: definition.tintName), in: Circle())
+                            .overlay(Circle().strokeBorder(DesignToken.Color.card, lineWidth: 1.5))
+                    }
+                }
+            }
+        }
+    }
+
+    private func controlButton(title: String, symbol: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                Text(title).font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? DesignToken.Color.destructive : .primary)
+        .glassSurface(
+            .interactive,
+            cornerRadius: DesignToken.Radius.control,
+            tint: (isActive ? DesignToken.Color.destructive : DesignToken.Color.accent).opacity(isActive ? 0.22 : 0.1),
+            interactive: true
+        )
+    }
+
+    private var screenShareButton: some View {
+        Button {
+            if appState.discordScreenShareHotkey == nil {
+                showingHotkeyPicker = true
+            } else {
+                Task { await appState.triggerDiscordScreenShareHotkey() }
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: "rectangle.inset.filled.badge.record")
+                Text("Share").font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.14), interactive: true)
+        .onLongPressGesture { showingHotkeyPicker = true }
+        .accessibilityHint("Double tap to trigger. Touch and hold to change the hotkey.")
+    }
+
+    @ViewBuilder
+    private var joinLeaveButton: some View {
+        if store.voice.isConnected {
+            Button {
+                Task { await store.leave() }
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "phone.down.fill")
+                    Text("Leave").font(.caption2.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
+        } else {
+            Menu {
+                if store.guilds.isEmpty {
+                    Text("No servers loaded yet")
+                }
+                ForEach(store.guilds) { guild in
+                    Menu(guild.name) {
+                        let channels = store.channelsByGuildID[guild.id] ?? []
+                        if channels.isEmpty {
+                            Text("No voice channels")
+                        }
+                        ForEach(channels) { channel in
+                            Button(channel.name) {
+                                Task { await store.join(channelID: channel.id) }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "phone.fill")
+                    Text("Join").font(.caption2.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.18), interactive: true)
+        }
+    }
+}
+
+private struct MockDiscordWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: appState.mockRoomControl.discord.isConnected ? .available : .unavailable)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(appState.mockRoomControl.discord.isConnected ? appState.mockRoomControl.discord.channelName : "Not connected")
+                        .font(.subheadline.weight(.semibold))
+                    if appState.mockRoomControl.discord.isConnected {
+                        Text("\(appState.mockRoomControl.discord.participantNames.count) in voice")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+
+            HStack(spacing: DesignToken.Spacing.small) {
+                mockToggleButton(title: "Mute", symbol: "mic.fill", isActive: appState.mockRoomControl.discord.selfMute) {
+                    Task { await appState.toggleMockDiscordMute() }
+                }
+                mockToggleButton(title: "Deafen", symbol: "headphones", isActive: appState.mockRoomControl.discord.selfDeaf) {
+                    Task { await appState.toggleMockDiscordDeafen() }
+                }
+                Button {
+                    Task { await appState.toggleMockDiscordConnection() }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: appState.mockRoomControl.discord.isConnected ? "phone.down.fill" : "phone.fill")
+                        Text(appState.mockRoomControl.discord.isConnected ? "Leave" : "Join").font(.caption2.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(
+                    .interactive,
+                    cornerRadius: DesignToken.Radius.control,
+                    tint: (appState.mockRoomControl.discord.isConnected ? DesignToken.Color.destructive : DesignToken.Color.positive).opacity(0.18),
+                    interactive: true
+                )
+            }
+        }
+    }
+
+    private func mockToggleButton(title: String, symbol: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                Text(title).font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? DesignToken.Color.destructive : .primary)
+        .glassSurface(
+            .interactive,
+            cornerRadius: DesignToken.Radius.control,
+            tint: (isActive ? DesignToken.Color.destructive : DesignToken.Color.accent).opacity(isActive ? 0.22 : 0.1),
+            interactive: true
+        )
+    }
+}
+
+private struct HotkeyPickerView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var modifiers: RemoteModifiers
+    @State private var keyCode: Int
+    let onSave: (HotkeyCombo?) -> Void
+
+    init(combo: HotkeyCombo?, onSave: @escaping (HotkeyCombo?) -> Void) {
+        _modifiers = State(initialValue: combo?.modifiers ?? [.control, .alt])
+        _keyCode = State(initialValue: combo?.keyCode ?? 0x53) // "S"
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Modifiers") {
+                    HStack(spacing: DesignToken.Spacing.small) {
+                        ForEach(RemoteModifiers.allCases, id: \.title) { item in
+                            Button {
+                                if modifiers.contains(item.modifier) { modifiers.remove(item.modifier) }
+                                else { modifiers.insert(item.modifier) }
+                            } label: {
+                                Text(item.title)
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, DesignToken.Spacing.medium)
+                                    .padding(.vertical, DesignToken.Spacing.small)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(modifiers.contains(item.modifier) ? DesignToken.Color.accent : .primary)
+                            .glassSurface(.interactive, cornerRadius: 999, tint: modifiers.contains(item.modifier) ? DesignToken.Color.accent.opacity(0.22) : nil, interactive: true)
+                        }
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                Section("Key") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                        ForEach(HotkeyCombo.availableKeys, id: \.keyCode) { key in
+                            Button {
+                                keyCode = key.keyCode
+                            } label: {
+                                Text(key.label)
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 36)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(keyCode == key.keyCode ? DesignToken.Color.accent : .primary)
+                            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: keyCode == key.keyCode ? DesignToken.Color.accent.opacity(0.22) : nil, interactive: true)
+                        }
+                    }
+                    .padding(.vertical, DesignToken.Spacing.xSmall)
+                    .listRowBackground(Color.clear)
+                }
+                Section {
+                    Text("Preview: \(HotkeyCombo(keyCode: keyCode, modifiers: modifiers).displayString)")
+                        .font(.subheadline.weight(.semibold))
+                } footer: {
+                    Text("This should match the hotkey your Vencord plugin (or any other tool) already listens for.")
+                }
+            }
+            .navigationTitle("Screen Share Hotkey")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(HotkeyCombo(keyCode: keyCode, modifiers: modifiers))
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 

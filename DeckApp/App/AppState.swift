@@ -42,6 +42,7 @@ final class AppState {
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
     var sceneOrchestrationExecution: SceneOrchestrationExecution?
+    var discordScreenShareHotkey: HotkeyCombo?
     let remoteInput: RemoteInputController
     let lgTV: LGTVStore
     let sleepTimer = SleepTimerController()
@@ -98,6 +99,7 @@ final class AppState {
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
         favoriteSceneActionIDs = Set(UserDefaults.standard.stringArray(forKey: "homeAssistant.favoriteSceneActions") ?? [])
         sceneOrchestrationExecution = nil
+        discordScreenShareHotkey = (try? JSONDecoder().decode(HotkeyCombo.self, from: UserDefaults.standard.data(forKey: "discord.screenShareHotkey") ?? Data()))
         let savedButtonMapping = companionSettings.loadButtonMapping()
         let savedDashboardMappings = companionSettings.loadDashboardMappings()
         companionAddress = companionSettings.loadAddress()
@@ -1177,6 +1179,76 @@ final class AppState {
     func toggleMockLight() async {
         mockRoomControl.light.isOn.toggle()
         await confirmMockControl("Light power")
+    }
+
+    func setDiscordScreenShareHotkey(_ combo: HotkeyCombo?) {
+        discordScreenShareHotkey = combo
+        if let combo, let data = try? JSONEncoder().encode(combo) {
+            UserDefaults.standard.set(data, forKey: "discord.screenShareHotkey")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "discord.screenShareHotkey")
+        }
+    }
+
+    @discardableResult
+    func triggerDiscordScreenShareHotkey() async -> Bool {
+        guard let combo = discordScreenShareHotkey else { return false }
+        return await remoteInput.sendHotkey(combo)
+    }
+
+    func toggleMockDiscordConnection() async {
+        if mockRoomControl.discord.isConnected {
+            mockRoomControl.discord.isConnected = false
+        } else {
+            mockRoomControl.discord.isConnected = true
+        }
+        await confirmMockControl("Discord voice connection")
+    }
+
+    func toggleMockDiscordMute() async {
+        mockRoomControl.discord.selfMute.toggle()
+        await confirmMockControl("Discord mute")
+    }
+
+    func toggleMockDiscordDeafen() async {
+        mockRoomControl.discord.selfDeaf.toggle()
+        await confirmMockControl("Discord deafen")
+    }
+
+    func toggleSpotifyPlayback() async {
+        mockRoomControl.spotify.isPlaying.toggle()
+        await confirmMockControl("Spotify playback")
+    }
+
+    func skipSpotifyTrack(forward: Bool) async {
+        let count = MockSpotifyState.library.count
+        mockRoomControl.spotify.trackIndex = (mockRoomControl.spotify.trackIndex + (forward ? 1 : -1) + count) % count
+        mockRoomControl.spotify.progressSeconds = 0
+        await confirmMockControl(forward ? "Spotify skip" : "Spotify previous")
+    }
+
+    func toggleSpotifyLike() async {
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        if mockRoomControl.spotify.likedTrackIDs.contains(trackID) {
+            mockRoomControl.spotify.likedTrackIDs.remove(trackID)
+            await confirmMockControl("Removed from Liked Songs")
+        } else {
+            mockRoomControl.spotify.likedTrackIDs.insert(trackID)
+            await confirmMockControl("Added to Liked Songs")
+        }
+    }
+
+    func toggleCurrentSpotifyTrack(inPlaylistID playlistID: String) async {
+        guard let index = mockRoomControl.spotify.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        let playlistName = mockRoomControl.spotify.playlists[index].name
+        if let trackIndex = mockRoomControl.spotify.playlists[index].trackIDs.firstIndex(of: trackID) {
+            mockRoomControl.spotify.playlists[index].trackIDs.remove(at: trackIndex)
+            await confirmMockControl("Removed from \(playlistName)")
+        } else {
+            mockRoomControl.spotify.playlists[index].trackIDs.append(trackID)
+            await confirmMockControl("Added to \(playlistName)")
+        }
     }
 
     func toggleMockTelevisionPower() async {
