@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen.Models;
@@ -63,8 +64,10 @@ public sealed class ScreenStreamService(
             return;
         }
 
+        var tickStopwatch = new Stopwatch();
         while (!stoppingToken.IsCancellationRequested)
         {
+            tickStopwatch.Restart();
             var subscriberCount = broadcaster.SubscriberCount;
             var active = safety.ScreenShareAllowed && subscriberCount > 0;
             if (active)
@@ -107,10 +110,18 @@ public sealed class ScreenStreamService(
                 lock (_modeGate) TearDownCaptureLocked();
             }
 
-            var delay = active
+            // Fixed-rate scheduling, not sleep-after-work: capture+encode time varies frame to
+            // frame (scene complexity, system load, the resize step when downscaling), so
+            // sleeping a constant interval after variable-length work produces a variable
+            // total period between frames -- i.e. jitter baked in before the client ever sees
+            // a byte, which client-side display-timing fixes can't undo. Target a fixed
+            // wall-clock tick instead: subtract the work just done from the interval, clamped
+            // at zero if a frame overran its budget (no negative delay, no busy-loop catch-up).
+            var targetInterval = active
                 ? TimeSpan.FromSeconds(1d / options.ScreenStream.TargetFps)
                 : TimeSpan.FromMilliseconds(500);
-            await Task.Delay(delay, stoppingToken);
+            var remaining = targetInterval - tickStopwatch.Elapsed;
+            if (remaining > TimeSpan.Zero) await Task.Delay(remaining, stoppingToken);
         }
     }
 
