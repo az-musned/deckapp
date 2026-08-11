@@ -312,7 +312,7 @@ struct SettingsView: View {
 
                 Section("PC command behavior") {
                     LabeledContent("Wake workflow") {
-                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs wake method + sensor")
+                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a Wake-on-LAN MAC address")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
                     }
                     LabeledContent("Queued-action timeout") {

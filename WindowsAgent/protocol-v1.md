@@ -48,6 +48,10 @@ Authenticated requests use `Authorization: Bearer <credential>`. Invalid or revo
 
 Allow Remote Input is independent from other Agent capabilities. Emergency disable overrides it. Both are Windows-owned state and cannot be enabled remotely by iOS.
 
+## Power control
+
+`POST /api/v1/agent/power/shutdown` authenticates the current client and, if `remoteInputAllowed` is set and emergency disable is not active, initiates a graceful Windows shutdown (`shutdown /s /t 5`) and returns `200`. `401` if unauthenticated, `409` if remote control is currently disabled on Windows. There is no remote power-on endpoint: DeckApp wakes the PC directly with a Wake-on-LAN magic packet sent from the client over the LAN/VPN, since the Agent cannot run while the PC is off.
+
 ## Input endpoint
 
 Connect a WebSocket to `wss://<private-agent-address>:8732/api/v1/agent/input` with the bearer credential. Only one input session is accepted. The server replies with a `ready` message containing `sessionId`, `protocolVersion`, and `serverTimestampMilliseconds`.

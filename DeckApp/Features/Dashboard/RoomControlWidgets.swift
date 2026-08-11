@@ -801,6 +801,7 @@ private struct DirectionalRemoteControl: View {
 private struct MockPCPowerWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
+    @State private var showShutdownConfirmation = false
 
     var body: some View {
         DashboardCard {
@@ -810,7 +811,7 @@ private struct MockPCPowerWidget: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(appState.mockRoomControl.pcPower.pcState.title)
                         .font(.title3.bold())
-                    Text("Plug: \(appState.mockRoomControl.pcPower.plugState.rawValue.capitalized)")
+                    Text("Wake-on-LAN: \(appState.mockRoomControl.pcPower.plugState.rawValue.capitalized)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -823,22 +824,44 @@ private struct MockPCPowerWidget: View {
                     .tint(DesignToken.Color.warning)
             }
 
-            Button {
-                RemoteHaptics.heavy()
-                Task { await appState.startPCControl() }
-            } label: {
-                Label("Turn On and Start PC", systemImage: "power")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, DesignToken.Spacing.small)
+            if appState.mockRoomControl.pcPower.pcState == .online {
+                Button(role: .destructive) {
+                    RemoteHaptics.heavy()
+                    showShutdownConfirmation = true
+                } label: {
+                    Label("Shut Down PC", systemImage: "power")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
+                .confirmationDialog(
+                    "Shut down the PC?",
+                    isPresented: $showShutdownConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Shut Down PC", role: .destructive) {
+                        Task { await appState.shutdownPC() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This sends a graceful shutdown to the Windows Agent. Save your work first.")
+                }
+            } else {
+                Button {
+                    RemoteHaptics.heavy()
+                    Task { await appState.startPCControl() }
+                } label: {
+                    Label("Turn On and Start PC", systemImage: "power")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
+                .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
             }
-            .buttonStyle(.plain)
-            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
-            .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
-
-            Label("Power-off is intentionally unavailable", systemImage: "lock.shield.fill")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 

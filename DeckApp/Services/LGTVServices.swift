@@ -189,10 +189,8 @@ protocol LGTVWakeOnLANServing: Sendable {
 
 actor LGTVWakeOnLANService: LGTVWakeOnLANServing {
     nonisolated static func magicPacket(macAddress: String) throws -> Data {
-        let normalized = macAddress.replacingOccurrences(of: "-", with: ":")
-        let bytes = normalized.split(separator: ":").compactMap { UInt8($0, radix: 16) }
-        guard bytes.count == 6 else { throw LGTVProtocolError.wakeOnLANNotConfigured }
-        return Data(repeating: 0xFF, count: 6) + Data(Array(repeating: bytes, count: 16).flatMap { $0 })
+        do { return try WakeOnLANTransport.magicPacket(macAddress: macAddress) }
+        catch { throw LGTVProtocolError.wakeOnLANNotConfigured }
     }
 
     nonisolated static func broadcastTargets(for host: String) -> [String] {
@@ -208,38 +206,7 @@ actor LGTVWakeOnLANService: LGTVWakeOnLANServing {
 
     func wake(macAddress: String, host: String) async throws {
         let packet = try Self.magicPacket(macAddress: macAddress)
-        let targets = Self.broadcastTargets(for: host)
-        try await Task.detached(priority: .userInitiated) {
-            let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-            guard descriptor >= 0 else { throw POSIXError(.ENETDOWN) }
-            defer { close(descriptor) }
-            var enabled: Int32 = 1
-            guard setsockopt(descriptor, SOL_SOCKET, SO_BROADCAST, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-                throw POSIXError(.EPERM)
-            }
-            var sentAtLeastOnce = false
-            for _ in 0..<3 {
-                for target in targets {
-                    for port: UInt16 in [9, 7] {
-                        var address = sockaddr_in()
-                        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-                        address.sin_family = sa_family_t(AF_INET)
-                        address.sin_port = in_port_t(port).bigEndian
-                        inet_pton(AF_INET, target, &address.sin_addr)
-                        let sent = packet.withUnsafeBytes { bytes in
-                            withUnsafePointer(to: &address) { addressPointer in
-                                addressPointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                                    sendto(descriptor, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                                }
-                            }
-                        }
-                        sentAtLeastOnce = sentAtLeastOnce || sent == packet.count
-                    }
-                }
-                usleep(80_000)
-            }
-            guard sentAtLeastOnce else { throw POSIXError(.EIO) }
-        }.value
+        try await WakeOnLANTransport.send(packet: packet, targets: Self.broadcastTargets(for: host))
     }
 }
 
