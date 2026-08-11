@@ -113,45 +113,34 @@ struct RemoteControlView: View {
     }
 
     private var header: some View {
-        HStack(spacing: DesignToken.Spacing.medium) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PC Remote")
-                    .font(.title2.bold())
-                HStack(spacing: DesignToken.Spacing.xSmall) {
-                    Circle().fill(connectionColor).frame(width: 8, height: 8)
-                    Text(remote.connectionState.title)
-                    if let latency = remote.connectionState.latencyMilliseconds {
-                        Text("· \(latency) ms")
-                    }
+        RemoteHeaderBar(
+            title: "PC Remote",
+            statusColor: connectionColor,
+            statusText: remote.connectionState.title,
+            statusDetail: remote.connectionState.latencyMilliseconds.map { "\($0) ms" }
+        ) {
+            HStack(spacing: DesignToken.Spacing.medium) {
+                RemoteIconButton(symbol: "slider.horizontal.3", accessibilityLabel: "Remote settings") {
+                    showSettings = true
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(connectionColor)
-            }
-            Spacer()
 
-            Button { showSettings = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .frame(width: 38, height: 38)
-            }
-            .buttonStyle(.plain)
-            .glassSurface(.interactive, cornerRadius: 999, interactive: true)
-
-            if remote.connectionState.acceptsInput || remote.connectionState == .connecting {
-                Button("Disconnect", role: .destructive) {
-                    Task { await remote.disconnect() }
-                }
-                .buttonStyle(.bordered)
-            } else {
-                Button {
-                    if remote.pairingState.isPaired {
-                        Task { await remote.connect() }
-                    } else {
-                        showSettings = true
+                if remote.connectionState.acceptsInput || remote.connectionState == .connecting {
+                    Button("Disconnect", role: .destructive) {
+                        Task { await remote.disconnect() }
                     }
-                } label: {
-                    Label(remote.pairingState.isPaired ? "Connect" : "Pair", systemImage: remote.pairingState.isPaired ? "link" : "checkmark.shield")
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        if remote.pairingState.isPaired {
+                            Task { await remote.connect() }
+                        } else {
+                            showSettings = true
+                        }
+                    } label: {
+                        Label(remote.pairingState.isPaired ? "Connect" : "Pair", systemImage: remote.pairingState.isPaired ? "link" : "checkmark.shield")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
     }
