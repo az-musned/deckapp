@@ -6,32 +6,78 @@ enum RemoteTarget: String {
     case tv
 }
 
+/// The PC extra panel now lives in `RemoteControlMode` (Models/RemoteInputModels.swift).
+/// The TV side gets its own small set here since it has no PC equivalent to share with.
+private enum TVExtraPanel: String, CaseIterable, Identifiable {
+    case apps
+    case inputs
+    case display
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .apps: "Apps"
+        case .inputs: "Inputs"
+        case .display: "Display"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .apps: "square.grid.2x2.fill"
+        case .inputs: "cable.connector"
+        case .display: "sun.max.fill"
+        }
+    }
+}
+
+/// One remote screen for both the PC and the TV. `target` decides which device the
+/// touchpad, media row, and shortcut strip currently drive; it's kept in sync with
+/// whatever the TV actually reports (`RemoteModeResolver`) but can be overridden by hand.
 struct RemoteControlView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("remote.target.v1") private var target = RemoteTarget.pc
     @State private var lastAutoDecisionKey: String?
     @State private var showSettings = false
+    @State private var showTVSetup = false
     @State private var showClipboardActions = false
     @State private var showFullScreenTouchpad = false
+    @State private var tvExtraPanel = TVExtraPanel.apps
+    @State private var isTouchpadDragging = false
 
     private var remote: RemoteInputController { appState.remoteInput }
+    private var tv: LGTVStore { appState.lgTV }
 
     var body: some View {
         GeometryReader { proxy in
             let compact = proxy.size.width < 720
 
             VStack(spacing: DesignToken.Spacing.medium) {
+                header
                 targetSwitcher
 
-                if target == .pc, appState.lgTV.connectionState.isConnected {
-                    tvQuickControlStrip
-                }
-
-                switch target {
-                case .pc:
-                    pcContent(compact: compact)
-                case .tv:
-                    LGTVRemoteView(embedded: true)
+                if target == .tv, tv.selectedDevice == nil {
+                    ContentUnavailableView {
+                        Label("Add an LG TV", systemImage: "tv.badge.wifi")
+                    } description: {
+                        Text("Discover a webOS TV on this network or enter its local address.")
+                    } actions: {
+                        Button("Set Up TV") { showTVSetup = true }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxHeight: .infinity)
+                } else {
+                    touchpad
+                        .frame(minHeight: compact ? 200 : 250, maxHeight: compact ? 250 : 320)
+                    mediaRow
+                    shortcutStrip
+                    extraPanelPicker
+                    ScrollView {
+                        extraPanelContent
+                            .padding(.bottom, DesignToken.Spacing.medium)
+                    }
+                    .scrollIndicators(.hidden)
                 }
             }
             .padding(compact ? DesignToken.Spacing.medium : DesignToken.Spacing.large)
@@ -40,8 +86,11 @@ struct RemoteControlView: View {
         .sheet(isPresented: $showSettings) {
             RemoteInputSettingsView(remote: remote)
         }
+        .sheet(isPresented: $showTVSetup) {
+            LGTVDeviceSetupView()
+        }
         .fullScreenCover(isPresented: $showFullScreenTouchpad) {
-            FullScreenRemoteTouchpad(remote: remote)
+            FullScreenRemoteTouchpad(target: target, remote: remote, tv: tv)
         }
         .confirmationDialog("Send clipboard text to the PC?", isPresented: $showClipboardActions, titleVisibility: .visible) {
             Button("Send Clipboard Text") { sendClipboard(pasteAfterCopy: false) }
@@ -54,6 +103,9 @@ struct RemoteControlView: View {
             await remote.refreshAgentSecurityState()
             if remote.pairingState.isPaired, remote.connectionState == .disconnected {
                 await remote.connect()
+            }
+            if tv.canAutomaticallyConnectSelectedDevice, !tv.connectionState.isConnected {
+                await tv.connect()
             }
         }
         .onChange(of: stateChangeKey, initial: true) { _, newKey in
@@ -86,41 +138,6 @@ struct RemoteControlView: View {
         Binding(get: { target }, set: { target = $0 })
     }
 
-    /// Pinned so TV volume and power stay reachable while the PC remote is showing,
-    /// without duplicating the full TV control surface shown by `LGTVRemoteView`.
-    private var tvQuickControlStrip: some View {
-        HStack(spacing: DesignToken.Spacing.medium) {
-            Label("TV", systemImage: "tv")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: DesignToken.Spacing.small)
-
-            RemoteIconButton(symbol: "power", accessibilityLabel: "TV power") {
-                Task { await appState.lgTV.powerToggle() }
-            }
-            RemoteIconButton(symbol: "speaker.minus.fill", accessibilityLabel: "TV volume down") {
-                Task { await appState.lgTV.volumeDown() }
-            }
-            Text("\(appState.lgTV.tvState.volume)%")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 32)
-            RemoteIconButton(symbol: "speaker.plus.fill", accessibilityLabel: "TV volume up") {
-                Task { await appState.lgTV.volumeUp() }
-            }
-            RemoteIconButton(
-                symbol: appState.lgTV.tvState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                accessibilityLabel: appState.lgTV.tvState.isMuted ? "Unmute TV" : "Mute TV"
-            ) {
-                Task { await appState.lgTV.toggleMute() }
-            }
-        }
-        .padding(.horizontal, DesignToken.Spacing.medium)
-        .padding(.vertical, DesignToken.Spacing.small)
-        .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
-    }
-
     private var targetSwitcher: some View {
         Picker("Remote target", selection: targetBinding) {
             Label("PC", systemImage: "desktopcomputer").tag(RemoteTarget.pc)
@@ -129,91 +146,173 @@ struct RemoteControlView: View {
         .pickerStyle(.segmented)
     }
 
-    private func pcContent(compact: Bool) -> some View {
-        VStack(spacing: DesignToken.Spacing.medium) {
-            header
-            modeSelector
-            shortcutStrip
-
-            Group {
-                switch remote.selectedMode {
-                case .touchpad:
-                    touchpadMode(compact: compact)
-                case .keyboard:
-                    RemoteKeyboardPanel(remote: remote)
-                case .media:
-                    RemoteMediaPanel(remote: remote)
-                case .shortcuts:
-                    RemoteShortcutsPanel(remote: remote)
-                }
-            }
-            .opacity(remote.selectedMode == .media || remote.connectionState.acceptsInput ? 1 : 0.52)
-        }
-    }
-
     private var header: some View {
         RemoteHeaderBar(
-            title: "PC Remote",
-            statusColor: connectionColor,
-            statusText: remote.connectionState.title,
-            statusDetail: remote.connectionState.latencyMilliseconds.map { "\($0) ms" }
+            title: target == .pc ? "PC Remote" : "TV Remote",
+            statusColor: target == .pc ? pcStatusColor : tvStatusColor,
+            statusText: target == .pc ? remote.connectionState.title : tv.connectionState.title,
+            statusDetail: target == .pc ? remote.connectionState.latencyMilliseconds.map { "\($0) ms" } : nil
         ) {
             HStack(spacing: DesignToken.Spacing.medium) {
-                RemoteIconButton(symbol: "slider.horizontal.3", accessibilityLabel: "Remote settings") {
-                    showSettings = true
+                RemoteIconButton(
+                    symbol: target == .pc ? "slider.horizontal.3" : "gearshape",
+                    accessibilityLabel: target == .pc ? "Remote settings" : "TV settings"
+                ) {
+                    if target == .pc { showSettings = true } else { showTVSetup = true }
                 }
 
-                if remote.connectionState.acceptsInput || remote.connectionState == .connecting {
-                    Button("Disconnect", role: .destructive) {
-                        Task { await remote.disconnect() }
+                connectionButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionButton: some View {
+        switch target {
+        case .pc:
+            if remote.connectionState.acceptsInput || remote.connectionState == .connecting {
+                Button("Disconnect", role: .destructive) {
+                    Task { await remote.disconnect() }
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button {
+                    if remote.pairingState.isPaired {
+                        Task { await remote.connect() }
+                    } else {
+                        showSettings = true
                     }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button {
-                        if remote.pairingState.isPaired {
-                            Task { await remote.connect() }
-                        } else {
-                            showSettings = true
-                        }
-                    } label: {
-                        Label(remote.pairingState.isPaired ? "Connect" : "Pair", systemImage: remote.pairingState.isPaired ? "link" : "checkmark.shield")
-                    }
-                    .buttonStyle(.borderedProminent)
+                } label: {
+                    Label(remote.pairingState.isPaired ? "Connect" : "Pair", systemImage: remote.pairingState.isPaired ? "link" : "checkmark.shield")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        case .tv:
+            Button {
+                RemoteHaptics.heavy()
+                Task { await tv.powerToggle() }
+            } label: {
+                Label(tv.connectionState.isConnected ? "Off" : "Wake", systemImage: "power")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var touchpad: some View {
+        UnifiedTouchpadSurface(target: target, remote: remote, tv: tv, isDragging: $isTouchpadDragging) {
+            showFullScreenTouchpad = true
+        }
+        .opacity(interactionEnabled ? 1 : 0.52)
+    }
+
+    private var mediaRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DesignToken.Spacing.medium) {
+                playbackButtons
+                Spacer(minLength: 0)
+                volumeButtons
+            }
+            VStack(spacing: DesignToken.Spacing.small) {
+                playbackButtons
+                volumeButtons
+            }
+        }
+        .padding(.horizontal, 2)
+        .opacity(interactionEnabled ? 1 : 0.52)
+    }
+
+    private var playbackButtons: some View {
+        HStack(spacing: DesignToken.Spacing.medium) {
+            mediaButton("backward.fill") {
+                switch target {
+                case .pc: remote.sendKey(.mediaPrevious)
+                case .tv: Task { await tv.playback(.rewind) }
+                }
+            }
+            mediaButton("playpause.fill", large: true) {
+                switch target {
+                case .pc: remote.sendKey(.mediaPlayPause)
+                case .tv: Task { await tv.playback(.play) }
+                }
+            }
+            mediaButton("forward.fill") {
+                switch target {
+                case .pc: remote.sendKey(.mediaNext)
+                case .tv: Task { await tv.playback(.fastForward) }
                 }
             }
         }
     }
 
-    private var modeSelector: some View {
-        Picker("Remote mode", selection: Bindable(remote).selectedMode) {
-            ForEach(RemoteControlMode.allCases) { mode in
-                Label(mode.title, systemImage: mode.symbol).tag(mode)
+    private var volumeButtons: some View {
+        HStack(spacing: DesignToken.Spacing.medium) {
+            mediaButton("speaker.minus.fill") {
+                switch target {
+                case .pc: remote.sendKey(.volumeDown)
+                case .tv: Task { await tv.volumeDown() }
+                }
+            }
+            mediaButton(muteSymbol) {
+                switch target {
+                case .pc: remote.sendKey(.volumeMute)
+                case .tv: Task { await tv.toggleMute() }
+                }
+            }
+            mediaButton("speaker.plus.fill") {
+                switch target {
+                case .pc: remote.sendKey(.volumeUp)
+                case .tv: Task { await tv.volumeUp() }
+                }
             }
         }
-        .pickerStyle(.segmented)
-        .padding(DesignToken.Spacing.xSmall)
-        .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
+    }
+
+    private var muteSymbol: String {
+        target == .tv && tv.tvState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+    }
+
+    private func mediaButton(_ symbol: String, large: Bool = false, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            RemoteHaptics.key()
+        } label: {
+            Image(systemName: symbol)
+                .font(large ? .largeTitle : .title2)
+                .frame(width: large ? 84 : 64, height: large ? 84 : 64)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.accent.opacity(0.16), interactive: true)
     }
 
     private var shortcutStrip: some View {
         ScrollView(.horizontal) {
             HStack(spacing: DesignToken.Spacing.small) {
-                ForEach(remote.preferences.shortcutRow, id: \.self) { key in
-                    RemoteKeyButton(title: key.displayTitle, symbol: key.displaySymbol, enabled: remote.connectionState.acceptsInput) {
-                        remote.sendKey(key)
+                switch target {
+                case .pc:
+                    ForEach(remote.preferences.shortcutRow, id: \.self) { key in
+                        RemoteKeyButton(title: key.displayTitle, symbol: key.displaySymbol, enabled: remote.connectionState.acceptsInput) {
+                            remote.sendKey(key)
+                        }
                     }
-                }
-                RemoteKeyButton(title: "Keyboard", symbol: "keyboard", enabled: true) {
-                    remote.selectedMode = .keyboard
-                }
-                RemoteKeyButton(title: "Media", symbol: "playpause", enabled: true) {
-                    remote.selectedMode = .media
-                }
-                RemoteKeyButton(title: "Desktop", symbol: "macwindow", enabled: remote.connectionState.acceptsInput) {
-                    remote.sendKey(.desktop)
-                }
-                RemoteKeyButton(title: "Clipboard", symbol: "doc.on.clipboard", enabled: remote.connectionState.acceptsInput) {
-                    showClipboardActions = true
+                    RemoteKeyButton(title: "Desktop", symbol: "macwindow", enabled: remote.connectionState.acceptsInput) {
+                        remote.sendKey(.desktop)
+                    }
+                    RemoteKeyButton(title: "Clipboard", symbol: "doc.on.clipboard", enabled: remote.connectionState.acceptsInput) {
+                        showClipboardActions = true
+                    }
+                case .tv:
+                    RemoteKeyButton(title: "Back", symbol: "arrow.uturn.backward", enabled: true) {
+                        RemoteHaptics.heavy()
+                        Task { await tv.send(.back) }
+                    }
+                    RemoteKeyButton(title: "Home", symbol: "house.fill", enabled: true) {
+                        RemoteHaptics.heavy()
+                        Task { await tv.send(.home) }
+                    }
+                    RemoteKeyButton(title: "Menu", symbol: "line.3.horizontal", enabled: true) {
+                        RemoteHaptics.heavy()
+                        Task { await tv.send(.menu) }
+                    }
                 }
             }
             .padding(.vertical, 2)
@@ -221,40 +320,83 @@ struct RemoteControlView: View {
         .scrollIndicators(.hidden)
     }
 
-    private func touchpadMode(compact: Bool) -> some View {
-        VStack(spacing: DesignToken.Spacing.small) {
-            HStack {
-                Label(remote.lastInteraction, systemImage: remote.isDragging ? "hand.draw.fill" : "cursorarrow.motionlines")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if remote.preferences.precisionMode {
-                    Text("PRECISION")
-                        .font(.caption2.bold())
-                        .foregroundStyle(DesignToken.Color.cyan)
+    @ViewBuilder
+    private var extraPanelPicker: some View {
+        switch target {
+        case .pc:
+            Picker("PC panel", selection: Bindable(remote).selectedMode) {
+                ForEach(RemoteControlMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.symbol).tag(mode)
                 }
-                Button {
-                    showFullScreenTouchpad = true
-                } label: {
-                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(DesignToken.Color.accent)
             }
-
-            RemoteTouchpadPanel(remote: remote)
-                .frame(maxHeight: .infinity)
+            .pickerStyle(.segmented)
+            .padding(DesignToken.Spacing.xSmall)
+            .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
+        case .tv:
+            Picker("TV panel", selection: $tvExtraPanel) {
+                ForEach(TVExtraPanel.allCases) { panel in
+                    Label(panel.title, systemImage: panel.symbol).tag(panel)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(DesignToken.Spacing.xSmall)
+            .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
         }
     }
 
-    private var connectionColor: Color {
+    @ViewBuilder
+    private var extraPanelContent: some View {
+        switch target {
+        case .pc:
+            switch remote.selectedMode {
+            case .keyboard: RemoteKeyboardPanel(remote: remote)
+            case .agent: RemoteAgentPanel(remote: remote)
+            case .shortcuts: RemoteShortcutsPanel(remote: remote)
+            }
+        case .tv:
+            switch tvExtraPanel {
+            case .apps:
+                if !tv.tvState.applications.isEmpty {
+                    LGTVApplicationsCard()
+                } else {
+                    ContentUnavailableView("No Apps", systemImage: "square.grid.2x2", description: Text("Connect to the TV to load its Home launcher."))
+                }
+            case .inputs:
+                if !tv.tvState.inputs.isEmpty {
+                    LGTVInputsCard()
+                } else {
+                    ContentUnavailableView("No Inputs", systemImage: "cable.connector", description: Text("Connect to the TV to load its inputs."))
+                }
+            case .display:
+                DashboardCard {
+                    LGTVDisplayControls()
+                }
+            }
+        }
+    }
+
+    private var interactionEnabled: Bool {
+        switch target {
+        case .pc: remote.connectionState.acceptsInput
+        case .tv: tv.connectionState.isConnected
+        }
+    }
+
+    private var pcStatusColor: Color {
         switch remote.connectionState {
         case .connected: DesignToken.Color.positive
         case .highLatency: DesignToken.Color.warning
         case .connecting: DesignToken.Color.cyan
         case .permissionDisabled, .emergencyDisabled, .authenticationRejected, .unavailable: DesignToken.Color.destructive
         case .disconnected: .secondary
+        }
+    }
+
+    private var tvStatusColor: Color {
+        switch tv.connectionState {
+        case .connected: DesignToken.Color.positive
+        case .connecting, .discovering, .reconnecting, .awaitingPairing: .orange
+        default: DesignToken.Color.destructive
         }
     }
 
@@ -265,64 +407,135 @@ struct RemoteControlView: View {
     }
 }
 
-private struct RemoteTouchpadPanel: View {
+/// The one touchpad surface for both targets. Drag deltas and taps get routed to the
+/// PC's pointer queue or the TV's webOS pointer socket depending on `target` — the same
+/// physical gesture, a different destination, so "one remote" is literal, not just a
+/// shared look.
+struct UnifiedTouchpadSurface: View {
+    let target: RemoteTarget
     let remote: RemoteInputController
+    let tv: LGTVStore
+    @Binding var isDragging: Bool
+    var onExpand: (() -> Void)?
 
     var body: some View {
         VStack(spacing: DesignToken.Spacing.small) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
-                    .fill(DesignToken.Color.card)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
-                            .strokeBorder(remote.isDragging ? DesignToken.Color.accent.opacity(0.7) : DesignToken.Color.cardBorder, lineWidth: remote.isDragging ? 1.5 : 0.75)
-                    }
-
-                VStack(spacing: DesignToken.Spacing.small) {
-                    Image(systemName: remote.isDragging ? "hand.draw.fill" : "hand.point.up.left")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary.opacity(0.45))
-                    Text(remote.isDragging ? "Dragging" : "Touchpad")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Text("Tap to click · Two fingers to scroll · Hold to drag")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+            HStack {
+                Label(statusText, systemImage: statusSymbol)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if target == .pc, remote.preferences.precisionMode {
+                    Text("PRECISION")
+                        .font(.caption2.bold())
+                        .foregroundStyle(DesignToken.Color.cyan)
                 }
-                .allowsHitTesting(false)
-
-                RemoteTouchpadSurface(
-                    pointerMoved: remote.enqueuePointer,
-                    scrolled: remote.enqueueScroll,
-                    tapped: {
-                        remote.click(.left)
-                        RemoteHaptics.click()
-                    },
-                    twoFingerTapped: {
-                        guard remote.preferences.twoFingerRightClick else { return }
-                        remote.click(.right)
-                        RemoteHaptics.click()
-                    },
-                    dragChanged: { active in
-                        remote.setDrag(active: active)
-                        RemoteHaptics.click()
+                if let onExpand {
+                    Button(action: onExpand) {
+                        Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption.weight(.semibold))
                     }
-                )
-                .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DesignToken.Color.accent)
+                }
             }
-            .frame(minHeight: 260)
+
+            surface
+                .frame(maxHeight: .infinity)
 
             HStack(spacing: DesignToken.Spacing.small) {
-                RemoteKeyButton(title: "Left Click", symbol: "cursorarrow.click", enabled: remote.connectionState.acceptsInput) {
-                    remote.click(.left)
-                    RemoteHaptics.click()
-                }
-                RemoteKeyButton(title: "Right Click", symbol: "contextualmenu.and.cursorarrow", enabled: remote.connectionState.acceptsInput) {
-                    remote.click(.right)
-                    RemoteHaptics.click()
+                switch target {
+                case .pc:
+                    RemoteKeyButton(title: "Left Click", symbol: "cursorarrow.click", enabled: remote.connectionState.acceptsInput) {
+                        remote.click(.left)
+                        RemoteHaptics.click()
+                    }
+                    RemoteKeyButton(title: "Right Click", symbol: "contextualmenu.and.cursorarrow", enabled: remote.connectionState.acceptsInput) {
+                        remote.click(.right)
+                        RemoteHaptics.click()
+                    }
+                case .tv:
+                    RemoteKeyButton(title: "Select", symbol: "checkmark.circle", enabled: true) {
+                        Task { await tv.clickPointer() }
+                        RemoteHaptics.click()
+                    }
+                    RemoteKeyButton(title: "Back", symbol: "arrow.uturn.backward", enabled: true) {
+                        Task { await tv.send(.back) }
+                        RemoteHaptics.click()
+                    }
                 }
             }
         }
+    }
+
+    private var statusText: String {
+        isDragging ? "Dragging" : (target == .pc ? remote.lastInteraction : "TV Pointer")
+    }
+
+    private var statusSymbol: String {
+        isDragging ? "hand.draw.fill" : (target == .pc ? "cursorarrow.motionlines" : "hand.point.up.left")
+    }
+
+    private var surface: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
+                .fill(DesignToken.Color.card)
+                .overlay {
+                    RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
+                        .strokeBorder(isDragging ? DesignToken.Color.accent.opacity(0.7) : DesignToken.Color.cardBorder, lineWidth: isDragging ? 1.5 : 0.75)
+                }
+
+            VStack(spacing: DesignToken.Spacing.small) {
+                Image(systemName: isDragging ? "hand.draw.fill" : "hand.point.up.left")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary.opacity(0.45))
+                Text(isDragging ? "Dragging" : (target == .pc ? "Touchpad" : "TV Pointer"))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Text(target == .pc ? "Tap to click · Two fingers to scroll · Hold to drag" : "Drag to move the TV pointer · Tap to select")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .allowsHitTesting(false)
+
+            RemoteTouchpadSurface(
+                pointerMoved: { dx, dy in
+                    switch target {
+                    case .pc: remote.enqueuePointer(deltaX: dx, deltaY: dy)
+                    case .tv: Task { await tv.movePointer(dx: dx, dy: dy, drag: false) }
+                    }
+                },
+                scrolled: { dx, dy in
+                    switch target {
+                    case .pc: remote.enqueueScroll(deltaX: dx, deltaY: dy)
+                    case .tv: Task { await tv.scrollPointer(dx: dx, dy: dy) }
+                    }
+                },
+                tapped: {
+                    switch target {
+                    case .pc: remote.click(.left)
+                    case .tv: Task { await tv.clickPointer() }
+                    }
+                    RemoteHaptics.click()
+                },
+                twoFingerTapped: {
+                    switch target {
+                    case .pc:
+                        guard remote.preferences.twoFingerRightClick else { return }
+                        remote.click(.right)
+                    case .tv:
+                        Task { await tv.send(.back) }
+                    }
+                    RemoteHaptics.click()
+                },
+                dragChanged: { active in
+                    isDragging = active
+                    if target == .pc { remote.setDrag(active: active) }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
+        }
+        .frame(minHeight: 220)
     }
 }
 
@@ -418,7 +631,10 @@ private struct RemoteKeyboardPanel: View {
     }
 }
 
-private struct RemoteMediaPanel: View {
+/// The PC "Agent" panel — everything the Windows Agent exposes beyond raw input:
+/// applications/games, Windows audio sessions, and GoXLR. Media keys themselves live
+/// in the unified remote's always-visible media row, not here.
+private struct RemoteAgentPanel: View {
     let remote: RemoteInputController
 
     var body: some View {
@@ -436,8 +652,6 @@ private struct RemoteMediaPanel: View {
                     .padding(DesignToken.Spacing.medium)
                     .background(DesignToken.Color.card, in: RoundedRectangle(cornerRadius: DesignToken.Radius.control, style: .continuous))
                 }
-
-                mediaKeyControls
 
                 if let snapshot = remote.capabilitySnapshot {
                     agentSection("Applications & Games", symbol: "square.grid.2x2.fill") {
@@ -483,44 +697,13 @@ private struct RemoteMediaPanel: View {
 
                 Text(remote.usesMockAgent
                      ? "Mock Agent controls. A command is confirmed only after the Agent reports the expected state; request acceptance alone is never shown as success."
-                     : "Media keys use the authenticated input session. Applications, Windows audio sessions, and GoXLR controls use paired HTTPS capability endpoints.")
+                     : "Applications, Windows audio sessions, and GoXLR controls use paired HTTPS capability endpoints.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(.bottom, DesignToken.Spacing.medium)
         }
         .scrollIndicators(.hidden)
-    }
-
-    private var mediaKeyControls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: DesignToken.Spacing.medium) {
-                playbackKeys
-                Spacer(minLength: 0)
-                volumeKeys
-            }
-            VStack(spacing: DesignToken.Spacing.small) {
-                playbackKeys
-                volumeKeys
-            }
-        }
-        .padding(.horizontal, 2)
-    }
-
-    private var playbackKeys: some View {
-        HStack(spacing: DesignToken.Spacing.medium) {
-            mediaButton("backward.fill", .mediaPrevious)
-            mediaButton("playpause.fill", .mediaPlayPause, large: true)
-            mediaButton("forward.fill", .mediaNext)
-        }
-    }
-
-    private var volumeKeys: some View {
-        HStack(spacing: DesignToken.Spacing.medium) {
-            mediaButton("speaker.slash.fill", .volumeMute)
-            mediaButton("speaker.minus.fill", .volumeDown)
-            mediaButton("speaker.plus.fill", .volumeUp)
-        }
     }
 
     private func agentSection<Content: View>(_ title: String, symbol: String, @ViewBuilder content: () -> Content) -> some View {
@@ -536,20 +719,6 @@ private struct RemoteMediaPanel: View {
             RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
                 .strokeBorder(DesignToken.Color.cardBorder, lineWidth: 0.75)
         }
-    }
-
-    private func mediaButton(_ symbol: String, _ key: RemoteVirtualKey, large: Bool = false) -> some View {
-        Button {
-            remote.sendKey(key)
-            RemoteHaptics.key()
-        } label: {
-            Image(systemName: symbol)
-                .font(large ? .largeTitle : .title2)
-                .frame(width: large ? 84 : 64, height: large ? 84 : 64)
-        }
-        .buttonStyle(.plain)
-        .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.accent.opacity(0.16), interactive: true)
-        .disabled(!remote.connectionState.acceptsInput)
     }
 }
 
@@ -835,12 +1004,15 @@ private struct RemoteInputSettingsView: View {
 
 private struct FullScreenRemoteTouchpad: View {
     @Environment(\.dismiss) private var dismiss
+    let target: RemoteTarget
     let remote: RemoteInputController
+    let tv: LGTVStore
+    @State private var isDragging = false
 
     var body: some View {
         ZStack {
             AppBackground()
-            RemoteTouchpadPanel(remote: remote)
+            UnifiedTouchpadSurface(target: target, remote: remote, tv: tv, isDragging: $isDragging)
                 .padding(DesignToken.Spacing.medium)
                 .padding(.top, 48)
                 .zIndex(0)

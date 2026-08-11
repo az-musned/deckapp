@@ -208,40 +208,15 @@ struct LGTVRemoteView: View {
                 }
             )
 
-            if let brightness = appState.lgTV.tvState.brightness {
-                HStack {
-                    Label("Brightness", systemImage: "sun.max.fill").font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(brightness)%").font(.headline.monospacedDigit())
-                }
-                Slider(
-                    value: Binding(
-                        get: { Double(brightness) },
-                        set: { appState.lgTV.tvState.brightness = Int($0.rounded()) }
-                    ),
-                    in: 0...100,
-                    step: 1,
-                    onEditingChanged: { editing in
-                        if !editing { Task { await appState.lgTV.setBrightness(appState.lgTV.tvState.brightness ?? brightness) } }
-                    }
-                )
-                .tint(.orange)
-            }
-
-            HStack(spacing: DesignToken.Spacing.small) {
-                playbackButton("backward.fill", .rewind)
-                playbackButton("play.fill", .play)
-                playbackButton("pause.fill", .pause)
-                playbackButton("forward.fill", .fastForward)
-            }
+            LGTVDisplayControls()
         }
     }
 
     private var appsContent: some View {
         ScrollView {
             VStack(spacing: DesignToken.Spacing.medium) {
-                if !appState.lgTV.tvState.inputs.isEmpty { inputCard }
-                if !appState.lgTV.tvState.applications.isEmpty { applicationCard }
+                if !appState.lgTV.tvState.inputs.isEmpty { LGTVInputsCard() }
+                if !appState.lgTV.tvState.applications.isEmpty { LGTVApplicationsCard() }
                 if appState.lgTV.tvState.inputs.isEmpty, appState.lgTV.tvState.applications.isEmpty {
                     ContentUnavailableView(
                         "No TV Apps Available",
@@ -257,59 +232,6 @@ struct LGTVRemoteView: View {
             }
         }
         .scrollIndicators(.hidden)
-    }
-
-    private var inputCard: some View {
-        DashboardCard {
-            Text("Inputs").font(.headline)
-            ScrollView(.horizontal) {
-                HStack(spacing: DesignToken.Spacing.small) {
-                    ForEach(appState.lgTV.tvState.inputs) { input in
-                        Button {
-                            RemoteHaptics.heavy()
-                            Task { await appState.lgTV.switchInput(input.id) }
-                        } label: {
-                            Label(input.name, systemImage: input.id.localizedCaseInsensitiveContains("hdmi") ? "cable.connector" : "rectangle.connected.to.line.below")
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14).padding(.vertical, 10)
-                        }
-                        .buttonStyle(.plain)
-                        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: appState.lgTV.tvState.currentInputID == input.id ? Color.purple.opacity(0.28) : nil, interactive: true)
-                    }
-                }
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private var applicationCard: some View {
-        DashboardCard {
-            HStack {
-                Text("Apps").font(.headline)
-                Spacer()
-                Text("TV Home launcher").font(.caption).foregroundStyle(.secondary)
-            }
-            ScrollView(.horizontal) {
-                HStack(spacing: DesignToken.Spacing.small) {
-                ForEach(appState.lgTV.tvState.applications) { application in
-                    Button {
-                        RemoteHaptics.heavy()
-                        Task { await appState.lgTV.launchApplication(application.id) }
-                    } label: {
-                        VStack(spacing: 8) {
-                            AsyncImage(url: application.iconURL) { image in image.resizable().scaledToFit() } placeholder: { Image(systemName: "app.fill").font(.title2) }
-                                .frame(width: 42, height: 42)
-                            Text(application.name).font(.caption.weight(.semibold)).lineLimit(1)
-                        }
-                        .frame(width: 92).padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-                    .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
-                }
-                }
-            }
-            .scrollIndicators(.hidden)
-        }
     }
 
     private var statusColor: Color {
@@ -331,6 +253,113 @@ struct LGTVRemoteView: View {
         RemoteKeyButton(title: title, symbol: symbol, enabled: true) {
             RemoteHaptics.heavy()
             Task { await action() }
+        }
+    }
+
+    private func playbackButton(_ symbol: String, _ command: LGTVPlaybackCommand) -> some View {
+        Button {
+            RemoteHaptics.heavy()
+            Task { await appState.lgTV.playback(command) }
+        } label: {
+            Image(systemName: symbol).frame(maxWidth: .infinity).padding(.vertical, 11)
+        }.buttonStyle(.plain).glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+    }
+}
+
+/// Shared with the unified PC/TV remote's TV extra panel, so the input list only exists once.
+struct LGTVInputsCard: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        DashboardCard {
+            Text("Inputs").font(.headline)
+            ScrollView(.horizontal) {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(appState.lgTV.tvState.inputs) { input in
+                        Button {
+                            RemoteHaptics.heavy()
+                            Task { await appState.lgTV.switchInput(input.id) }
+                        } label: {
+                            Label(input.name, systemImage: input.id.localizedCaseInsensitiveContains("hdmi") ? "cable.connector" : "rectangle.connected.to.line.below")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: appState.lgTV.tvState.currentInputID == input.id ? Color.purple.opacity(0.28) : nil, interactive: true)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
+/// Shared with the unified PC/TV remote's TV extra panel, so the app grid only exists once.
+struct LGTVApplicationsCard: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        DashboardCard {
+            HStack {
+                Text("Apps").font(.headline)
+                Spacer()
+                Text("TV Home launcher").font(.caption).foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(appState.lgTV.tvState.applications) { application in
+                        Button {
+                            RemoteHaptics.heavy()
+                            Task { await appState.lgTV.launchApplication(application.id) }
+                        } label: {
+                            VStack(spacing: 8) {
+                                AsyncImage(url: application.iconURL) { image in image.resizable().scaledToFit() } placeholder: { Image(systemName: "app.fill").font(.title2) }
+                                    .frame(width: 42, height: 42)
+                                Text(application.name).font(.caption.weight(.semibold)).lineLimit(1)
+                            }
+                            .frame(width: 92).padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
+/// Brightness slider and playback transport — the parts of TV "Sound & Playback" that
+/// aren't volume, since volume moved into the unified remote's always-visible media row.
+struct LGTVDisplayControls: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        if let brightness = appState.lgTV.tvState.brightness {
+            HStack {
+                Label("Brightness", systemImage: "sun.max.fill").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(brightness)%").font(.headline.monospacedDigit())
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(brightness) },
+                    set: { appState.lgTV.tvState.brightness = Int($0.rounded()) }
+                ),
+                in: 0...100,
+                step: 1,
+                onEditingChanged: { editing in
+                    if !editing { Task { await appState.lgTV.setBrightness(appState.lgTV.tvState.brightness ?? brightness) } }
+                }
+            )
+            .tint(.orange)
+        }
+
+        HStack(spacing: DesignToken.Spacing.small) {
+            playbackButton("backward.fill", .rewind)
+            playbackButton("play.fill", .play)
+            playbackButton("pause.fill", .pause)
+            playbackButton("forward.fill", .fastForward)
         }
     }
 

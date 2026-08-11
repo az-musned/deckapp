@@ -6,7 +6,7 @@ import UIKit
 @Observable
 final class RemoteInputController {
     var connectionState: RemoteConnectionState = .disconnected
-    var selectedMode: RemoteControlMode = .touchpad
+    var selectedMode: RemoteControlMode = .keyboard
     var preferences = RemoteInputPreferences()
     var heldState = HeldRemoteInputState()
     var isDragging = false
