@@ -27,118 +27,11 @@ struct RoomControlWidgetView: View {
             GoXLRWidget(definition: definition, compact: compact)
         case .companionActions:
             CompanionActionsWidget(definition: definition, compact: compact)
-        case .remoteInputLauncher:
-            RemoteInputLauncherWidget(definition: definition)
-        case .screenMirror:
-            ScreenMirrorLauncherWidget(definition: definition)
         case .spotify:
             MockSpotifyWidget(definition: definition, compact: compact)
         case .discord:
             DiscordWidget(definition: definition, compact: compact)
         }
-    }
-}
-
-private struct RemoteInputLauncherWidget: View {
-    @Environment(AppState.self) private var appState
-    let definition: RoomWidgetDefinition
-
-    var body: some View {
-        DashboardCard {
-            if definition.size == .small {
-                WidgetHeader(definition: definition, availability: .available)
-                Text(appState.remoteInput.connectionState.title)
-                    .font(.title3.bold())
-                Button {
-                    RemoteHaptics.heavy()
-                    appState.selectedSection = .remote
-                } label: {
-                    Label("Open", systemImage: "arrow.up.forward.app.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, DesignToken.Spacing.small)
-                }
-                .buttonStyle(.plain)
-                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.18), interactive: true)
-            } else {
-                HStack(spacing: DesignToken.Spacing.medium) {
-                    GlassIcon(symbol: definition.symbol, tint: DesignToken.Color.cyan, size: 46)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(definition.title).font(.headline).lineLimit(1)
-                        Text("\(appState.remoteInput.connectionState.title) · Mock Agent")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        RemoteHaptics.heavy()
-                        appState.selectedSection = .remote
-                    } label: {
-                        Label("Open Remote", systemImage: "arrow.up.forward.app.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, DesignToken.Spacing.medium)
-                            .padding(.vertical, DesignToken.Spacing.small)
-                    }
-                    .buttonStyle(.plain)
-                    .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.18), interactive: true)
-                }
-            }
-        }
-    }
-}
-
-private struct ScreenMirrorLauncherWidget: View {
-    @Environment(AppState.self) private var appState
-    @State private var showFullScreenMirror = false
-    let definition: RoomWidgetDefinition
-
-    private var remote: RemoteInputController { appState.remoteInput }
-    private var mode: ScreenMirrorMode { definition.resolvedScreenMirrorMode }
-    private var store: ScreenMirrorStore { mode == .extend ? remote.extendDisplay : remote.screenMirror }
-    private var tint: Color { mode == .extend ? Color.controlDeckTint(named: "purple") : DesignToken.Color.cyan }
-    private var watchLabel: String { mode == .extend ? "Extend" : "Watch" }
-
-    private var statusText: String {
-        remote.usesMockAgent ? "Mock Agent" : remote.securityState.screenShareAllowed ? "Ready" : "Disabled on PC"
-    }
-
-    var body: some View {
-        DashboardCard {
-            if definition.size == .small {
-                WidgetHeader(definition: definition, availability: .available)
-                Text(statusText)
-                    .font(.title3.bold())
-                watchButton
-            } else {
-                HStack(spacing: DesignToken.Spacing.medium) {
-                    GlassIcon(symbol: definition.symbol, tint: Color.controlDeckTint(named: definition.tintName), size: 46)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(definition.title).font(.headline).lineLimit(1)
-                        Text(statusText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    watchButton
-                }
-            }
-        }
-        .fullScreenCover(isPresented: $showFullScreenMirror) {
-            FullScreenScreenMirrorView(store: store)
-        }
-    }
-
-    private var watchButton: some View {
-        Button {
-            showFullScreenMirror = true
-        } label: {
-            Label(watchLabel, systemImage: definition.symbol)
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, DesignToken.Spacing.medium)
-                .padding(.vertical, DesignToken.Spacing.small)
-        }
-        .buttonStyle(.plain)
-        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.18), interactive: true)
     }
 }
 
@@ -802,6 +695,8 @@ private struct MockPCPowerWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
     @State private var showShutdownConfirmation = false
+    @State private var showFullScreenMirror = false
+    @State private var showFullScreenExtend = false
 
     var body: some View {
         DashboardCard {
@@ -862,7 +757,43 @@ private struct MockPCPowerWidget: View {
                 .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
                 .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
             }
+
+            quickLaunchRow
         }
+        .fullScreenCover(isPresented: $showFullScreenMirror) {
+            FullScreenScreenMirrorView(store: appState.remoteInput.screenMirror)
+        }
+        .fullScreenCover(isPresented: $showFullScreenExtend) {
+            FullScreenScreenMirrorView(store: appState.remoteInput.extendDisplay)
+        }
+    }
+
+    private var quickLaunchRow: some View {
+        HStack(spacing: DesignToken.Spacing.small) {
+            quickLaunchButton(title: "Remote", symbol: "rectangle.and.hand.point.up.left.fill", tint: DesignToken.Color.cyan) {
+                appState.selectedSection = .remote
+            }
+            quickLaunchButton(title: "Watch", symbol: "tv.and.mediabox.fill", tint: DesignToken.Color.cyan) {
+                showFullScreenMirror = true
+            }
+            quickLaunchButton(title: "Extend", symbol: "rectangle.on.rectangle", tint: Color.controlDeckTint(named: "purple")) {
+                showFullScreenExtend = true
+            }
+        }
+    }
+
+    private func quickLaunchButton(title: String, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            RemoteHaptics.click()
+            action()
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.xSmall)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.16), interactive: true)
     }
 
     @ViewBuilder

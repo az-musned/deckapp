@@ -7,8 +7,6 @@ enum RoomWidgetKind: String, Codable, CaseIterable, Sendable {
     case pcPower
     case audioMixer
     case companionActions
-    case remoteInputLauncher
-    case screenMirror
     case spotify
     case discord
 }
@@ -95,9 +93,6 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
     var padSize: RoomWidgetSize?
     /// Nil keeps older saved layouts on the four physical GoXLR-style defaults.
     var audioMixerChannelIDs: [String]?
-    /// Only meaningful when `kind == .screenMirror`. Defaults to `.mirror` for widgets
-    /// saved before extend mode existed.
-    var screenMirrorMode: ScreenMirrorMode?
 
     init(
         id: UUID = UUID(),
@@ -111,8 +106,7 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         capabilities: [DeviceCapabilityDescriptor],
         phoneSize: RoomWidgetSize? = nil,
         padSize: RoomWidgetSize? = nil,
-        audioMixerChannelIDs: [String]? = nil,
-        screenMirrorMode: ScreenMirrorMode? = nil
+        audioMixerChannelIDs: [String]? = nil
     ) {
         self.id = id
         self.title = title
@@ -126,10 +120,7 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         self.phoneSize = phoneSize
         self.padSize = padSize
         self.audioMixerChannelIDs = audioMixerChannelIDs
-        self.screenMirrorMode = screenMirrorMode
     }
-
-    var resolvedScreenMirrorMode: ScreenMirrorMode { screenMirrorMode ?? .mirror }
 
     func resolvedSize(for layoutClass: RoomWidgetLayoutClass) -> RoomWidgetSize {
         switch layoutClass {
@@ -150,8 +141,7 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
             capabilities: capabilities,
             phoneSize: phoneSize,
             padSize: padSize,
-            audioMixerChannelIDs: audioMixerChannelIDs,
-            screenMirrorMode: screenMirrorMode
+            audioMixerChannelIDs: audioMixerChannelIDs
         )
     }
 }
@@ -207,24 +197,13 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A104")!,
                 title: "PC Power",
-                subtitle: "Mock Smart Life plug workflow",
+                subtitle: "Wake-on-LAN power, remote, and screen share",
                 symbol: "powerplug.fill",
                 tintName: "orange",
                 kind: .pcPower,
-                size: .medium,
+                size: .wide,
                 backend: WidgetBackendReference(backend: .mock, identifier: "mock.switch.pc_plug"),
                 capabilities: MockCapabilities.pcPower
-            ),
-            RoomWidgetDefinition(
-                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A105")!,
-                title: "PC Keyboard & Touchpad",
-                subtitle: "Authenticated Windows Agent remote",
-                symbol: "rectangle.and.hand.point.up.left.fill",
-                tintName: "cyan",
-                kind: .remoteInputLauncher,
-                size: .banner,
-                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "mock.windows-agent.remote-input"),
-                capabilities: MockCapabilities.remoteInput
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A107")!,
@@ -237,30 +216,6 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.goxlr"),
                 capabilities: MockCapabilities.audioMixer,
                 audioMixerChannelIDs: RoomWidgetDefinition.defaultGoXLRChannelIDs
-            ),
-            RoomWidgetDefinition(
-                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A108")!,
-                title: "Screen Mirror",
-                subtitle: "Authenticated Windows Agent screen share",
-                symbol: "tv.and.mediabox.fill",
-                tintName: "cyan",
-                kind: .screenMirror,
-                size: .medium,
-                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.screen-mirror"),
-                capabilities: MockCapabilities.screenMirror,
-                screenMirrorMode: .mirror
-            ),
-            RoomWidgetDefinition(
-                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A109")!,
-                title: "Extend Display",
-                subtitle: "Authenticated Windows Agent virtual monitor",
-                symbol: "rectangle.on.rectangle",
-                tintName: "purple",
-                kind: .screenMirror,
-                size: .medium,
-                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.extend-display"),
-                capabilities: MockCapabilities.screenMirror,
-                screenMirrorMode: .extend
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A110")!,
@@ -342,7 +297,10 @@ enum MockCapabilities {
     static let pcPower: [DeviceCapabilityDescriptor] = [
         DeviceCapabilityDescriptor(id: "plug_power", kind: .power, name: "Supply Power"),
         DeviceCapabilityDescriptor(id: "pc_state", kind: .sensorValue, name: "PC State", isWritable: false),
-        DeviceCapabilityDescriptor(id: "start_pc", kind: .action, name: "Start PC")
+        DeviceCapabilityDescriptor(id: "start_pc", kind: .action, name: "Start PC"),
+        DeviceCapabilityDescriptor(id: "open_remote", kind: .action, name: "Open Remote"),
+        DeviceCapabilityDescriptor(id: "watch_screen", kind: .action, name: "Watch PC Screen"),
+        DeviceCapabilityDescriptor(id: "extend_display", kind: .action, name: "Extend Display")
     ]
 
     static let audioMixer: [DeviceCapabilityDescriptor] = [
@@ -365,15 +323,5 @@ enum MockCapabilities {
 
     static let companion: [DeviceCapabilityDescriptor] = [
         DeviceCapabilityDescriptor(id: "configured_action", kind: .action, name: "Configured Companion Action")
-    ]
-
-    static let remoteInput: [DeviceCapabilityDescriptor] = [
-        DeviceCapabilityDescriptor(id: "relative_pointer", kind: .directionalRemote, name: "Relative Pointer"),
-        DeviceCapabilityDescriptor(id: "keyboard", kind: .action, name: "Keyboard Input"),
-        DeviceCapabilityDescriptor(id: "media_keys", kind: .mediaPlayback, name: "Media Keys")
-    ]
-
-    static let screenMirror: [DeviceCapabilityDescriptor] = [
-        DeviceCapabilityDescriptor(id: "screen_watch", kind: .action, name: "Watch PC Screen")
     ]
 }

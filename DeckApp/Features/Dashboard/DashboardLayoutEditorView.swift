@@ -463,8 +463,6 @@ private extension RoomWidgetKind {
         case .pcPower: "PC Power"
         case .audioMixer: "Audio Mixer"
         case .companionActions: "Companion Actions"
-        case .remoteInputLauncher: "PC Remote"
-        case .screenMirror: "Screen Mirror"
         case .spotify: "Spotify"
         case .discord: "Discord"
         }
@@ -475,11 +473,9 @@ private extension RoomWidgetKind {
         case .light: "Power, brightness, and supported color controls."
         case .climate: "Temperature, HVAC, fan, and swing controls."
         case .television: "Volume, source, media, and directional remote."
-        case .pcPower: "Guarded plug-on and PC boot workflow."
+        case .pcPower: "Wake-on-LAN power, Windows Agent shutdown, remote, and screen share."
         case .audioMixer: "Capability-driven audio channel levels and mute."
         case .companionActions: "Existing Companion actions, macros, and folders."
-        case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
-        case .screenMirror: "Mirror the PC desktop live on this iPad, same-room only."
         case .spotify: "Now playing, playback controls, like, and add to playlist."
         case .discord: "Voice channel status, mute/deafen, join/leave, and screen share."
         }
