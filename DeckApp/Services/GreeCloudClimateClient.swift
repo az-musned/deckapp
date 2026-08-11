@@ -325,12 +325,14 @@ actor GreeCloudClimateClient: GreeClimateServing {
         guard let aes = try? AES(key: Array(device.key.utf8), blockMode: ECB(), padding: .noPadding),
               let decryptedBytes = try? aes.decrypt(Array(cipherData)) else { return }
         guard let inner = Self.parseTruncatedJSON(Data(decryptedBytes)) else { return }
+        print("[GreeDebug] MQTT topic=\(topic) inner=\(inner)")
         guard inner["t"] as? String == "dat",
               let cols = inner["cols"] as? [String],
               let values = inner["dat"] as? [Any] else { return }
 
         var props: [String: Any] = [:]
         for (column, value) in zip(cols, values) { props[column] = value }
+        print("[GreeDebug] MQTT props=\(props)")
 
         let updated = Self.mapState(props: props, previous: lastKnownStates[device.mac])
         lastKnownStates[device.mac] = updated

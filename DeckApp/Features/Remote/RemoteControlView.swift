@@ -23,6 +23,10 @@ struct RemoteControlView: View {
             VStack(spacing: DesignToken.Spacing.medium) {
                 targetSwitcher
 
+                if target == .pc, appState.lgTV.connectionState.isConnected {
+                    tvQuickControlStrip
+                }
+
                 switch target {
                 case .pc:
                     pcContent(compact: compact)
@@ -80,6 +84,41 @@ struct RemoteControlView: View {
     /// touching `lastAutoDecisionKey`, so it sticks until the next real TV state change.
     private var targetBinding: Binding<RemoteTarget> {
         Binding(get: { target }, set: { target = $0 })
+    }
+
+    /// Pinned so TV volume and power stay reachable while the PC remote is showing,
+    /// without duplicating the full TV control surface shown by `LGTVRemoteView`.
+    private var tvQuickControlStrip: some View {
+        HStack(spacing: DesignToken.Spacing.medium) {
+            Label("TV", systemImage: "tv")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: DesignToken.Spacing.small)
+
+            RemoteIconButton(symbol: "power", accessibilityLabel: "TV power") {
+                Task { await appState.lgTV.powerToggle() }
+            }
+            RemoteIconButton(symbol: "speaker.minus.fill", accessibilityLabel: "TV volume down") {
+                Task { await appState.lgTV.volumeDown() }
+            }
+            Text("\(appState.lgTV.tvState.volume)%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 32)
+            RemoteIconButton(symbol: "speaker.plus.fill", accessibilityLabel: "TV volume up") {
+                Task { await appState.lgTV.volumeUp() }
+            }
+            RemoteIconButton(
+                symbol: appState.lgTV.tvState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                accessibilityLabel: appState.lgTV.tvState.isMuted ? "Unmute TV" : "Mute TV"
+            ) {
+                Task { await appState.lgTV.toggleMute() }
+            }
+        }
+        .padding(.horizontal, DesignToken.Spacing.medium)
+        .padding(.vertical, DesignToken.Spacing.small)
+        .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
     }
 
     private var targetSwitcher: some View {
