@@ -28,6 +28,12 @@ nonisolated struct DiscordVoiceParticipant: Codable, Sendable, Equatable, Identi
     let deaf: Bool
     let selfMute: Bool
     let selfDeaf: Bool
+    let avatarURL: URL?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, username, mute, deaf, selfMute, selfDeaf
+        case avatarURL = "avatarUrl"
+    }
 }
 
 nonisolated struct DiscordVoiceChannelState: Codable, Sendable, Equatable {
@@ -58,6 +64,12 @@ nonisolated struct DiscordChannelSummary: Codable, Sendable, Equatable, Identifi
 nonisolated struct DiscordBridgeConfiguration: Sendable, Equatable {
     let addresses: [String]
     let credential: String
+}
+
+nonisolated struct DiscordLastChannel: Codable, Sendable, Equatable {
+    let channelID: String
+    let channelName: String
+    let guildID: String?
 }
 
 nonisolated struct DiscordStatusMessage: Decodable, Sendable {

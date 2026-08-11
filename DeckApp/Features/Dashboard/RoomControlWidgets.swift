@@ -909,6 +909,10 @@ private struct LiveSpotifyWidget: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if let lastActionError = store.lastActionError {
+                Text(lastActionError).font(.caption2).foregroundStyle(DesignToken.Color.destructive)
+            }
         }
         .task {
             await store.startWatching()
@@ -1240,17 +1244,42 @@ private struct LiveDiscordWidget: View {
             if store.voice.isConnected {
                 HStack(spacing: -6) {
                     ForEach(store.voice.participants.prefix(4)) { participant in
-                        Text(String(participant.username.prefix(2)).uppercased())
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .frame(width: 20, height: 20)
-                            .background(Color.controlDeckTint(named: definition.tintName), in: Circle())
-                            .overlay(Circle().strokeBorder(DesignToken.Color.card, lineWidth: 1.5))
+                        participantAvatar(for: participant)
                     }
                 }
             }
         }
     }
+
+    @ViewBuilder
+    private func participantAvatar(for participant: DiscordVoiceParticipant) -> some View {
+        let initials = Text(String(participant.username.prefix(2)).uppercased())
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(Color.controlDeckTint(named: definition.tintName), in: Circle())
+
+        Group {
+            if let avatarURL = participant.avatarURL {
+                AsyncImage(url: avatarURL) { phase in
+                    if let image = phase.image {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        initials
+                    }
+                }
+                .frame(width: 20, height: 20)
+                .clipShape(Circle())
+            } else {
+                initials
+            }
+        }
+        .overlay(Circle().strokeBorder(DesignToken.Color.card, lineWidth: 1.5))
+    }
+
+    /// Menu and Button size their default labels differently even with identical padding,
+    /// so every button in this row pins this height explicitly instead of relying on padding.
+    private let controlButtonHeight: CGFloat = 56
 
     private func controlButton(title: String, symbol: String, isActive: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -1258,8 +1287,7 @@ private struct LiveDiscordWidget: View {
                 Image(systemName: symbol)
                 Text(title).font(.caption2.weight(.semibold))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, DesignToken.Spacing.small)
+            .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? DesignToken.Color.destructive : .primary)
@@ -1283,8 +1311,7 @@ private struct LiveDiscordWidget: View {
                 Image(systemName: "rectangle.inset.filled.badge.record")
                 Text("Share").font(.caption2.weight(.semibold))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, DesignToken.Spacing.small)
+            .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
         }
         .buttonStyle(.plain)
         .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.14), interactive: true)
@@ -1302,13 +1329,20 @@ private struct LiveDiscordWidget: View {
                     Image(systemName: "phone.down.fill")
                     Text("Leave").font(.caption2.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
             }
             .buttonStyle(.plain)
             .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
         } else {
             Menu {
+                if let lastChannel = store.lastChannel {
+                    Button {
+                        Task { await store.join(channelID: lastChannel.channelID) }
+                    } label: {
+                        Label("Rejoin \(lastChannel.channelName)", systemImage: "arrow.uturn.backward")
+                    }
+                    Divider()
+                }
                 if store.guilds.isEmpty {
                     Text("No servers loaded yet")
                 }
@@ -1330,8 +1364,7 @@ private struct LiveDiscordWidget: View {
                     Image(systemName: "phone.fill")
                     Text("Join").font(.caption2.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
             }
             .buttonStyle(.plain)
             .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.18), interactive: true)

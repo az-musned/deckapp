@@ -64,7 +64,8 @@ final class SpotifyAuthClient: NSObject, ASWebAuthenticationPresentationContextP
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "scope", value: SpotifyAuthConfiguration.scopes),
-            URLQueryItem(name: "state", value: state)
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "show_dialog", value: "true")
         ]
         guard let authorizeURL = components.url else { throw SpotifyAuthError.invalidCallback }
 

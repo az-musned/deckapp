@@ -87,7 +87,7 @@ actor SpotifyClient: SpotifyServing {
     }
 
     func isTrackSaved(_ trackID: String, accessToken: String) async throws -> Bool {
-        var request = authorizedRequest(path: "me/tracks/contains", query: [URLQueryItem(name: "ids", value: trackID)], accessToken: accessToken)
+        var request = authorizedRequest(path: "me/library/contains", query: [URLQueryItem(name: "uris", value: "spotify:track:\(trackID)")], accessToken: accessToken)
         request.httpMethod = "GET"
         let (data, response) = try await session.data(for: request)
         try checkStatus(try validated(response), data: data)
@@ -95,7 +95,7 @@ actor SpotifyClient: SpotifyServing {
     }
 
     func setTrackSaved(_ saved: Bool, trackID: String, accessToken: String) async throws {
-        var request = authorizedRequest(path: "me/tracks", query: [URLQueryItem(name: "ids", value: trackID)], accessToken: accessToken)
+        var request = authorizedRequest(path: "me/library", query: [URLQueryItem(name: "uris", value: "spotify:track:\(trackID)")], accessToken: accessToken)
         request.httpMethod = saved ? "PUT" : "DELETE"
         let (data, response) = try await session.data(for: request)
         try checkStatus(try validated(response), data: data)
@@ -114,15 +114,17 @@ actor SpotifyClient: SpotifyServing {
         var result = Set<String>()
         for playlist in playlists {
             struct Envelope: Decodable {
-                struct Item: Decodable { struct Track: Decodable { let id: String? }; let track: Track? }
+                struct Item: Decodable { struct Track: Decodable { let id: String? }; let item: Track? }
                 let items: [Item]
             }
+            // Playlist contents are only returned for playlists the user owns or collaborates on;
+            // Spotify-curated playlists (Discover Weekly, etc.) return an empty list here, not an error.
             let envelope: Envelope = try await get(
-                "playlists/\(playlist.id)/tracks",
-                query: [URLQueryItem(name: "fields", value: "items(track(id))"), URLQueryItem(name: "limit", value: "100")],
+                "playlists/\(playlist.id)/items",
+                query: [URLQueryItem(name: "fields", value: "items(item(id))"), URLQueryItem(name: "limit", value: "100")],
                 accessToken: accessToken
             )
-            if envelope.items.contains(where: { $0.track?.id == trackID }) {
+            if envelope.items.contains(where: { $0.item?.id == trackID }) {
                 result.insert(playlist.id)
             }
         }
@@ -130,7 +132,7 @@ actor SpotifyClient: SpotifyServing {
     }
 
     func setPlaylistMembership(_ contains: Bool, playlistID: String, trackID: String, accessToken: String) async throws {
-        var request = authorizedRequest(path: "playlists/\(playlistID)/tracks", accessToken: accessToken)
+        var request = authorizedRequest(path: "playlists/\(playlistID)/items", accessToken: accessToken)
         request.httpMethod = contains ? "POST" : "DELETE"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let uri = "spotify:track:\(trackID)"

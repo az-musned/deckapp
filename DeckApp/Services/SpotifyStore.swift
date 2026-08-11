@@ -9,6 +9,7 @@ final class SpotifyStore {
     private(set) var isLikedCurrentTrack = false
     private(set) var playlists: [SpotifyPlaylist] = []
     private(set) var playlistMembership: Set<String> = []
+    private(set) var lastActionError: String?
     var clientID: String {
         didSet { defaults.set(clientID, forKey: clientIDKey) }
     }
@@ -91,18 +92,28 @@ final class SpotifyStore {
     }
 
     func toggleLike() async {
-        guard let token = await validAccessToken(), let trackID = playback.track?.id else { return }
+        guard let trackID = playback.track?.id else { return }
+        guard let token = await validAccessToken() else {
+            lastActionError = "Not signed in to Spotify."
+            return
+        }
         let newValue = !isLikedCurrentTrack
         isLikedCurrentTrack = newValue
         do {
             try await webClient.setTrackSaved(newValue, trackID: trackID, accessToken: token)
+            lastActionError = nil
         } catch {
             isLikedCurrentTrack = !newValue
+            lastActionError = error.localizedDescription
         }
     }
 
     func togglePlaylistMembership(playlistID: String) async {
-        guard let token = await validAccessToken(), let trackID = playback.track?.id else { return }
+        guard let trackID = playback.track?.id else { return }
+        guard let token = await validAccessToken() else {
+            lastActionError = "Not signed in to Spotify."
+            return
+        }
         let contains = playlistMembership.contains(playlistID)
         if contains {
             playlistMembership.remove(playlistID)
@@ -111,14 +122,22 @@ final class SpotifyStore {
         }
         do {
             try await webClient.setPlaylistMembership(!contains, playlistID: playlistID, trackID: trackID, accessToken: token)
+            lastActionError = nil
         } catch {
             if contains { playlistMembership.insert(playlistID) } else { playlistMembership.remove(playlistID) }
+            lastActionError = error.localizedDescription
         }
     }
 
     func loadPlaylistsIfNeeded() async {
         guard playlists.isEmpty, let token = await validAccessToken() else { return }
-        playlists = (try? await webClient.fetchPlaylists(accessToken: token)) ?? []
+        do {
+            playlists = try await webClient.fetchPlaylists(accessToken: token)
+            lastActionError = nil
+        } catch {
+            playlists = []
+            lastActionError = "Couldn't load playlists: \(error.localizedDescription)"
+        }
         await refreshPlaylistMembership()
     }
 

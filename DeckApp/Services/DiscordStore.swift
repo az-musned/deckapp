@@ -11,14 +11,21 @@ final class DiscordStore {
     private(set) var guilds: [DiscordGuildSummary] = []
     private(set) var channelsByGuildID: [String: [DiscordChannelSummary]] = [:]
     private(set) var isLoadingChannels = false
+    private(set) var lastChannel: DiscordLastChannel?
 
     @ObservationIgnored private weak var controller: RemoteInputController?
     @ObservationIgnored private let bridgeService: any DiscordBridgeServing
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let lastChannelKey = "discord.lastChannel"
     @ObservationIgnored private var consumers = 0
     @ObservationIgnored private var appIsActive = true
 
-    init(bridgeService: any DiscordBridgeServing = DiscordClient()) {
+    init(bridgeService: any DiscordBridgeServing = DiscordClient(), defaults: UserDefaults = .standard) {
         self.bridgeService = bridgeService
+        self.defaults = defaults
+        if let data = defaults.data(forKey: lastChannelKey) {
+            lastChannel = try? JSONDecoder().decode(DiscordLastChannel.self, from: data)
+        }
     }
 
     func attach(controller: RemoteInputController) { self.controller = controller }
@@ -109,6 +116,15 @@ final class DiscordStore {
         lastError = message.error
         if bridgeState == .ready, !wasReady {
             Task { await loadGuilds() }
+        }
+        if let channelID = voice.channelId, let channelName = voice.channelName {
+            let channel = DiscordLastChannel(channelID: channelID, channelName: channelName, guildID: voice.guildId)
+            if channel != lastChannel {
+                lastChannel = channel
+                if let data = try? JSONEncoder().encode(channel) {
+                    defaults.set(data, forKey: lastChannelKey)
+                }
+            }
         }
     }
 }

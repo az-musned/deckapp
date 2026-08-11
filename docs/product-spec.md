@@ -295,4 +295,6 @@ Widget sizes also control information density, not only grid width:
 
 Continue Phase 5: Home Assistant-backed PC online state, Wake-on-LAN, configurable queue timeouts, guarded PC boot, and command progress that distinguishes accepted wake requests from confirmed PC availability.
 
-Do not implement direct vendor APIs. Govee, Gree, Smart Life/Tuya, and TV control initially go through Home Assistant. Keep the working Companion integration private to the LAN or private VPN, and keep Windows input behind the future authenticated Windows Control Agent.
+Do not implement direct vendor APIs for new integrations by default. Smart Life/Tuya and TV control go through Home Assistant. Keep the working Companion integration private to the LAN or private VPN, and keep Windows input behind the future authenticated Windows Control Agent.
+
+Govee and Gree are the two deliberate exceptions to that rule: DeckApp connects to both vendor cloud APIs directly from Swift, with no Home Assistant or Windows Agent involvement. For Gree, this followed live protocol testing that proved the AC's local LAN protocol unreachable on this unit's firmware while the cloud path (login, state reads, and writes) worked end-to-end against the real account and device. Live Climate state is confirmed only while the app is foregrounded; backgrounded state is shown as stale rather than presented as current, since iOS does not keep the cloud MQTT session alive in the background.
