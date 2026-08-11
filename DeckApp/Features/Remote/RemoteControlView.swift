@@ -9,6 +9,7 @@ enum RemoteTarget: String {
 struct RemoteControlView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("remote.target.v1") private var target = RemoteTarget.pc
+    @State private var lastAutoDecisionKey: String?
     @State private var showSettings = false
     @State private var showClipboardActions = false
     @State private var showFullScreenTouchpad = false
@@ -51,10 +52,38 @@ struct RemoteControlView: View {
                 await remote.connect()
             }
         }
+        .onChange(of: stateChangeKey, initial: true) { _, newKey in
+            applyAutoTargetIfNeeded(newKey)
+        }
+    }
+
+    /// Changes whenever the TV state that determines "what's on screen" changes for
+    /// real — a fresh value here re-runs the auto-switch logic. Connection state is
+    /// coarsened to connected/not-connected so reconnect-attempt ticks don't count.
+    private var stateChangeKey: String {
+        "\(appState.lgTV.connectionState.isConnected)|\(appState.lgTV.tvState.currentInputID ?? "-")|\(appState.lgTV.tvState.foregroundApplicationID ?? "-")"
+    }
+
+    private func applyAutoTargetIfNeeded(_ newKey: String) {
+        guard newKey != lastAutoDecisionKey else { return }
+        lastAutoDecisionKey = newKey
+        if let auto = RemoteModeResolver.autoTarget(
+            tvState: appState.lgTV.tvState,
+            connectionState: appState.lgTV.connectionState,
+            pcTVInputID: appState.pcTVInputID
+        ) {
+            target = auto
+        }
+    }
+
+    /// Tapping the switcher directly is a manual override: it changes `target` without
+    /// touching `lastAutoDecisionKey`, so it sticks until the next real TV state change.
+    private var targetBinding: Binding<RemoteTarget> {
+        Binding(get: { target }, set: { target = $0 })
     }
 
     private var targetSwitcher: some View {
-        Picker("Remote target", selection: $target) {
+        Picker("Remote target", selection: targetBinding) {
             Label("PC", systemImage: "desktopcomputer").tag(RemoteTarget.pc)
             Label("TV", systemImage: "tv").tag(RemoteTarget.tv)
         }
@@ -572,29 +601,32 @@ private struct AgentGoXLRChannelRow: View {
     }
 }
 
+private struct RemoteShortcut: Identifiable {
+    let id = UUID()
+    let title: String
+    let symbol: String
+    let key: RemoteVirtualKey
+}
+
 private struct RemoteShortcutsPanel: View {
     let remote: RemoteInputController
 
-    private let shortcuts: [(String, String, RemoteVirtualKey)] = [
-        ("Copy", "doc.on.doc", .copy),
-        ("Paste", "doc.on.clipboard", .paste),
-        ("Undo", "arrow.uturn.backward", .undo),
-        ("Redo", "arrow.uturn.forward", .redo),
-        ("Alt+Tab", "rectangle.on.rectangle", .altTab),
-        ("Desktop", "macwindow", .desktop)
+    private let shortcuts: [RemoteShortcut] = [
+        RemoteShortcut(title: "Copy", symbol: "doc.on.doc", key: .copy),
+        RemoteShortcut(title: "Paste", symbol: "doc.on.clipboard", key: .paste),
+        RemoteShortcut(title: "Undo", symbol: "arrow.uturn.backward", key: .undo),
+        RemoteShortcut(title: "Redo", symbol: "arrow.uturn.forward", key: .redo),
+        RemoteShortcut(title: "Alt+Tab", symbol: "rectangle.on.rectangle", key: .altTab),
+        RemoteShortcut(title: "Desktop", symbol: "macwindow", key: .desktop)
     ]
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: DesignToken.Spacing.medium)]) {
-            ForEach(shortcuts, id: \.0) { shortcut in
-                RemoteKeyButton(title: shortcut.0, symbol: shortcut.1, enabled: remote.connectionState.acceptsInput) {
-                    remote.sendKey(shortcut.2)
-                    RemoteHaptics.key()
-                }
-                .frame(minHeight: 68)
+        AdaptiveRemoteGrid(items: shortcuts) { shortcut in
+            RemoteKeyButton(title: shortcut.title, symbol: shortcut.symbol, enabled: remote.connectionState.acceptsInput) {
+                remote.sendKey(shortcut.key)
+                RemoteHaptics.key()
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 

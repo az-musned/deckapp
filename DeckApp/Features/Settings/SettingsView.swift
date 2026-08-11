@@ -32,6 +32,24 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("PC and TV Remote") {
+                    if appState.lgTV.tvState.inputs.isEmpty {
+                        Text("Connect to your TV to choose which input your PC is connected to.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("PC's TV Input", selection: pcTVInputBinding) {
+                            Text("Not set").tag(Optional<String>.none)
+                            ForEach(appState.lgTV.tvState.inputs) { input in
+                                Text(input.name).tag(Optional(input.id))
+                            }
+                        }
+                    }
+                    Text("When the TV shows this input, the Remote tab automatically switches to the PC remote.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Home Assistant") {
                     TextField("Local URL", text: Binding(get: { appState.homeAssistantConfiguration.localURL }, set: { appState.homeAssistantConfiguration.localURL = $0 }))
                         .textInputAutocapitalization(.never)
@@ -416,6 +434,10 @@ struct SettingsView: View {
 
     private var pcPowerEntityBinding: Binding<String> {
         Binding(get: { appState.homeAssistantPCPowerEntityID }, set: { appState.mapHomeAssistantEntity($0, to: .pcPower) })
+    }
+
+    private var pcTVInputBinding: Binding<String?> {
+        Binding(get: { appState.pcTVInputID }, set: { appState.pcTVInputID = $0 })
     }
 
     private var pcOnlineSensorEntityBinding: Binding<String> {

@@ -323,21 +323,17 @@ struct LGTVRemoteView: View {
     }
 
     private func remoteButton(_ title: String, symbol: String, button: LGTVRemoteButton) -> some View {
-        Button {
+        RemoteKeyButton(title: title, symbol: symbol, enabled: true) {
             RemoteHaptics.heavy()
             Task { await appState.lgTV.send(button) }
-        } label: {
-            Label(title, systemImage: symbol).frame(maxWidth: .infinity).padding(.vertical, 10)
-        }.buttonStyle(.plain).glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+        }
     }
 
     private func actionButton(_ title: String, symbol: String, action: @escaping () async -> Void) -> some View {
-        Button {
+        RemoteKeyButton(title: title, symbol: symbol, enabled: true) {
             RemoteHaptics.heavy()
             Task { await action() }
-        } label: {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
-        }.buttonStyle(.plain).glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+        }
     }
 
     private func playbackButton(_ symbol: String, _ command: LGTVPlaybackCommand) -> some View {

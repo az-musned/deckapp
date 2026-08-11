@@ -43,6 +43,15 @@ final class AppState {
     var favoriteSceneActionIDs: Set<String>
     var sceneOrchestrationExecution: SceneOrchestrationExecution?
     var discordScreenShareHotkey: HotkeyCombo?
+    var pcTVInputID: String? {
+        didSet {
+            if let pcTVInputID {
+                UserDefaults.standard.set(pcTVInputID, forKey: "remote.pcTVInputID.v1")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "remote.pcTVInputID.v1")
+            }
+        }
+    }
     let remoteInput: RemoteInputController
     let lgTV: LGTVStore
     let sleepTimer = SleepTimerController()
@@ -100,6 +109,7 @@ final class AppState {
         favoriteSceneActionIDs = Set(UserDefaults.standard.stringArray(forKey: "homeAssistant.favoriteSceneActions") ?? [])
         sceneOrchestrationExecution = nil
         discordScreenShareHotkey = (try? JSONDecoder().decode(HotkeyCombo.self, from: UserDefaults.standard.data(forKey: "discord.screenShareHotkey") ?? Data()))
+        pcTVInputID = UserDefaults.standard.string(forKey: "remote.pcTVInputID.v1")
         let savedButtonMapping = companionSettings.loadButtonMapping()
         let savedDashboardMappings = companionSettings.loadDashboardMappings()
         companionAddress = companionSettings.loadAddress()

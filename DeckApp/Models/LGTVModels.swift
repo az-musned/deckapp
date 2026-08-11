@@ -69,6 +69,10 @@ struct LGTVInput: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var name: String
     var iconURL: URL?
+    /// The launcher appId webOS reports via getForegroundAppInfo while this input is
+    /// active (e.g. "com.webos.app.hdmi1"). Lets input changes be detected live through
+    /// the foreground-app subscription instead of only via app-initiated switchInput calls.
+    var appId: String? = nil
 }
 
 struct LGTVApplication: Identifiable, Codable, Equatable, Sendable {
