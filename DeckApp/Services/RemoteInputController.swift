@@ -186,6 +186,16 @@ final class RemoteInputController {
         }
     }
 
+    /// Sends a graceful shutdown command to the paired Windows Agent.
+    func shutdownAgent() async throws {
+        try await service.shutdown()
+    }
+
+    /// Cheap, unauthenticated reachability probe used to drive PC online/offline state.
+    func isAgentReachable() async -> Bool {
+        await service.isReachable()
+    }
+
     func refreshAgentSecurityState() async {
         let credential = try? pairingKeychain.load(account: pairingCredentialAccount)
         await service.restoreCredential(credential ?? nil)

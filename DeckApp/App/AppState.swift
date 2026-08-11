@@ -38,6 +38,11 @@ final class AppState {
     var homeAssistantLaunchGameScriptEntityID: String
     var homeAssistantSleepPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
+    var tuyaAccessID: String
+    var tuyaAccessSecret = ""
+    var tuyaDeviceID: String
+    var tuyaSwitchCode: String
+    var tuyaDataCenter: TuyaDataCenter
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
@@ -59,10 +64,14 @@ final class AppState {
     private let homeAssistantService: any HomeAssistantServiceProtocol
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
     private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
+    private let tuyaKeychain = KeychainSecretStore(service: "com.example.DeckApp.tuya")
+    private let makeSmartPlugService: @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
+    private let pcWakeOnLANService: any PCWakeOnLANServing
     private var activeHomeAssistantURL: URL?
     private var reconnectTask: Task<Void, Never>?
+    private var pcReachabilityTask: Task<Void, Never>?
     private var pendingHomeAssistantLightConfirmation: UUID?
     private var pendingHomeAssistantConfirmationEntityID: String?
 
@@ -75,7 +84,11 @@ final class AppState {
         remoteInput: RemoteInputController = RemoteInputController(),
         lgTV: LGTVStore = LGTVStore(),
         spotify: SpotifyStore = SpotifyStore(),
-        homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient()
+        homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
+        pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
+        makeSmartPlugService: @escaping @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering = {
+            TuyaCloudService(accessID: $0, accessSecret: $1, dataCenter: $2)
+        }
     ) {
         self.dashboardService = dashboardService
         self.commandService = commandService
@@ -86,9 +99,12 @@ final class AppState {
         self.lgTV = lgTV
         self.spotify = spotify
         self.homeAssistantService = homeAssistantService
+        self.pcWakeOnLANService = pcWakeOnLANService
+        self.makeSmartPlugService = makeSmartPlugService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
         goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
+        tuyaAccessSecret = (try? tuyaKeychain.load(account: "access-secret")) ?? ""
         homeAssistantLightEntityID = UserDefaults.standard.string(forKey: "homeAssistant.roomLightEntityID") ?? ""
         homeAssistantClimateEntityID = UserDefaults.standard.string(forKey: "homeAssistant.climateEntityID") ?? ""
         homeAssistantTelevisionEntityID = UserDefaults.standard.string(forKey: "homeAssistant.televisionEntityID") ?? ""
@@ -98,6 +114,10 @@ final class AppState {
         homeAssistantLaunchGameScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.launchGameScriptEntityID") ?? ""
         homeAssistantSleepPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.sleepPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
+        tuyaAccessID = UserDefaults.standard.string(forKey: "tuya.accessID") ?? ""
+        tuyaDeviceID = UserDefaults.standard.string(forKey: "tuya.deviceID") ?? ""
+        tuyaSwitchCode = UserDefaults.standard.string(forKey: "tuya.switchCode") ?? "switch_1"
+        tuyaDataCenter = TuyaDataCenter(rawValue: UserDefaults.standard.string(forKey: "tuya.dataCenter") ?? "") ?? .westAmerica
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
@@ -273,9 +293,17 @@ final class AppState {
             || !homeAssistantTelevisionEntityID.isEmpty || !homeAssistantPCPowerEntityID.isEmpty
     }
 
+    var hasConfiguredSmartPlugTrigger: Bool {
+        !tuyaAccessID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !tuyaDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var hasConfiguredPCWakeWorkflow: Bool {
-        !homeAssistantPCOnlineSensorEntityID.isEmpty
-            && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil)
+        hasConfiguredSmartPlugTrigger
+            || wakeOnLANConfiguration.normalizedMACAddress != nil
+            || (!homeAssistantPCOnlineSensorEntityID.isEmpty
+                && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil))
     }
 
     var integrationHealthItems: [IntegrationHealthItem] {
@@ -299,8 +327,8 @@ final class AppState {
                            homeAssistantLaunchGameScriptEntityID, homeAssistantSleepPCScriptEntityID].filter { !$0.isEmpty }.count
         let mappings = IntegrationHealthItem(id: "mappings", title: "Entity Mappings", status: "\(mappedCount) mapped", detail: "Identifiers hidden from diagnostics", level: mappedCount > 0 ? .healthy : .informational, symbol: "link.circle.fill")
         let pc = IntegrationHealthItem(
-            id: "pc", title: "PC State", status: homeAssistantPCOnlineSensorEntityID.isEmpty ? "No sensor" : (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline"),
-            detail: hasConfiguredPCWakeWorkflow ? "Wake workflow ready" : "Wake workflow incomplete", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
+            id: "pc", title: "PC State", status: hasConfiguredPCWakeWorkflow ? (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline") : "Not configured",
+            detail: hasConfiguredPCWakeWorkflow ? "Power-on trigger ready" : "Configure a smart plug or Wake-on-LAN in Settings", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
             symbol: "desktopcomputer"
         )
         let companion: IntegrationHealthItem = switch companionStatus {
@@ -386,6 +414,16 @@ final class AppState {
         if let data = try? JSONEncoder().encode(wakeOnLANConfiguration) { UserDefaults.standard.set(data, forKey: "homeAssistant.wakeOnLAN") }
         UserDefaults.standard.set(pcActionQueueTimeoutSeconds, forKey: "pcAction.queueTimeoutSeconds")
         UserDefaults.standard.set(wakePCBeforeQueuedActions, forKey: "pcAction.wakeBeforeQueuedActions")
+        UserDefaults.standard.set(tuyaAccessID.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.accessID")
+        UserDefaults.standard.set(tuyaDeviceID.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.deviceID")
+        UserDefaults.standard.set(tuyaSwitchCode.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.switchCode")
+        UserDefaults.standard.set(tuyaDataCenter.rawValue, forKey: "tuya.dataCenter")
+        let secret = tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if secret.isEmpty {
+            try? tuyaKeychain.delete(account: "access-secret")
+        } else {
+            try? tuyaKeychain.save(secret, account: "access-secret")
+        }
     }
 
     func toggleSceneActionFavorite(_ entityID: String) {
@@ -496,6 +534,7 @@ final class AppState {
     }
 
     func startNetworkMonitoring() {
+        startPCReachabilityMonitor()
         networkPathObserver.start { [weak self] isReachable in
             guard let self else { return }
             self.lgTV.networkPathChanged(isReachable: isReachable)
@@ -667,11 +706,56 @@ final class AppState {
     }
 
     func startPCControl() async {
-        guard !homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil else {
+        guard hasConfiguredSmartPlugTrigger
+                || wakeOnLANConfiguration.normalizedMACAddress != nil
+                || !homeAssistantPCPowerEntityID.isEmpty else {
             await startMockPC()
             return
         }
         _ = await wakePCAndWait(label: "Start PC")
+    }
+
+    /// Sends a graceful shutdown to the Windows Agent. Turning the PC back on happens
+    /// via the smart plug or Wake-on-LAN (see `wakePCAndWait`) rather than here.
+    func shutdownPC() async {
+        guard mockRoomControl.pcPower.pcState == .online else { return }
+        var execution = CommandExecution(action: .mockControl("Shut Down PC"), status: .running, backendMessage: "Sending shutdown to the Windows Agent…")
+        pendingCommand = execution
+        do {
+            try await remoteInput.shutdownAgent()
+            execution.status = .confirmed
+            execution.backendMessage = "Windows Agent accepted the shutdown request."
+            mockRoomControl.pcPower.backendReachable = false
+            mockRoomControl.pcPower.pcState = .offline
+            mockRoomControl.pcPower.plugState = .off
+        } catch {
+            execution.status = .failed
+            execution.backendMessage = error.localizedDescription
+        }
+        pendingCommand = execution
+    }
+
+    private func startPCReachabilityMonitor() {
+        pcReachabilityTask?.cancel()
+        pcReachabilityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshPCReachability()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func refreshPCReachability() async {
+        guard hasConfiguredSmartPlugTrigger || wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
+        let reachable = await remoteInput.isAgentReachable()
+        guard mockRoomControl.pcPower.backendReachable != reachable else { return }
+        mockRoomControl.pcPower.backendReachable = reachable
+        if reachable {
+            mockRoomControl.pcPower.pcState = .online
+        } else if mockRoomControl.pcPower.pcState == .online {
+            mockRoomControl.pcPower.pcState = .offline
+        }
     }
 
     private func wakePCAndWait(label: String) async -> Bool {
@@ -679,16 +763,41 @@ final class AppState {
             pendingCommand = CommandExecution(action: .mockControl(label), status: .confirmed, backendMessage: "PC is already online.")
             return true
         }
-        guard let activeHomeAssistantURL else {
-            pendingCommand = CommandExecution(action: .mockControl(label), status: .unavailable, backendMessage: "Home Assistant is offline.")
-            return false
-        }
 
         var execution = CommandExecution(action: .mockControl(label), status: .queued, backendMessage: "Queued while the PC wakes…")
         pendingCommand = execution
-        do {
-            var wakeMethodUsed = false
-            if !homeAssistantPCPowerEntityID.isEmpty, mockRoomControl.pcPower.plugState != .on {
+
+        if hasConfiguredSmartPlugTrigger {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Turning on the PC smart plug…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.plugState = .turningOn
+                mockRoomControl.pcPower.pcState = .supplyingPower
+                let smartPlugService = makeSmartPlugService(tuyaAccessID, tuyaAccessSecret, tuyaDataCenter)
+                try await smartPlugService.turnOn(deviceID: tuyaDeviceID, switchCode: tuyaSwitchCode)
+                mockRoomControl.pcPower.plugState = .on
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to trigger the smart plug: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if let mac = wakeOnLANConfiguration.normalizedMACAddress {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Sending Wake-on-LAN…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.pcState = .booting(progress: 0.2)
+                try await pcWakeOnLANService.wake(macAddress: mac, broadcastAddress: wakeOnLANConfiguration.broadcastAddress)
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to send Wake-on-LAN: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if let activeHomeAssistantURL, !homeAssistantPCPowerEntityID.isEmpty {
+            do {
                 execution.status = .running
                 execution.backendMessage = "Turning on the PC smart plug through Home Assistant…"
                 pendingCommand = execution
@@ -698,71 +807,47 @@ final class AppState {
                     HAServiceCall(domain: "switch", service: "turn_on", data: ["entity_id": .string(homeAssistantPCPowerEntityID)]),
                     baseURL: activeHomeAssistantURL, token: homeAssistantToken
                 )
-                wakeMethodUsed = true
-                try await Task.sleep(for: .seconds(1))
-            }
-
-            if wakePCBeforeQueuedActions, let mac = wakeOnLANConfiguration.normalizedMACAddress {
-                execution.status = .running
-                execution.backendMessage = "Sending Wake-on-LAN through Home Assistant…"
-                pendingCommand = execution
-                var data: [String: HAJSONValue] = ["mac": .string(mac)]
-                let broadcast = wakeOnLANConfiguration.broadcastAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !broadcast.isEmpty { data["broadcast_address"] = .string(broadcast) }
-                try await homeAssistantService.callService(
-                    HAServiceCall(domain: "wake_on_lan", service: "send_magic_packet", data: data),
-                    baseURL: activeHomeAssistantURL, token: homeAssistantToken
-                )
-                wakeMethodUsed = true
-            }
-
-            guard wakeMethodUsed else {
-                execution.status = .unavailable
-                execution.backendMessage = "Configure a smart plug or valid Wake-on-LAN MAC address first."
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = error.localizedDescription
                 pendingCommand = execution
                 return false
             }
-            guard !homeAssistantPCOnlineSensorEntityID.isEmpty else {
-                execution.status = .running
-                execution.backendMessage = "Wake request accepted. Map a PC online sensor to confirm startup."
-                pendingCommand = execution
-                return false
-            }
-
-            execution.status = .running
-            execution.backendMessage = "Wake request accepted. Waiting for the PC online sensor…"
-            pendingCommand = execution
-            let deadline = ContinuousClock.now.advanced(by: .seconds(pcActionQueueTimeoutSeconds))
-            while ContinuousClock.now < deadline {
-                if Task.isCancelled {
-                    execution.status = .failed
-                    execution.backendMessage = "Queued PC action was cancelled."
-                    pendingCommand = execution
-                    return false
-                }
-                if mockRoomControl.pcPower.backendReachable {
-                    execution.status = .confirmed
-                    execution.backendMessage = "PC online confirmed by Home Assistant."
-                    pendingCommand = execution
-                    return true
-                }
-                try await Task.sleep(for: .milliseconds(250))
-            }
-            execution.status = .failed
-            execution.backendMessage = "PC did not come online within \(Int(pcActionQueueTimeoutSeconds)) seconds; queued action cancelled."
-            pendingCommand = execution
-            return false
-        } catch is CancellationError {
-            execution.status = .failed
-            execution.backendMessage = "Queued PC action was cancelled."
-            pendingCommand = execution
-            return false
-        } catch {
-            execution.status = .failed
-            execution.backendMessage = error.localizedDescription
+        } else {
+            execution.status = .unavailable
+            execution.backendMessage = "Configure a smart plug trigger or Wake-on-LAN MAC address first."
             pendingCommand = execution
             return false
         }
+
+        execution.status = .running
+        execution.backendMessage = "Wake request sent. Waiting for the PC to come online…"
+        pendingCommand = execution
+        var bootProgress = 0.2
+        let deadline = ContinuousClock.now.advanced(by: .seconds(pcActionQueueTimeoutSeconds))
+        while ContinuousClock.now < deadline {
+            if Task.isCancelled {
+                execution.status = .failed
+                execution.backendMessage = "Queued PC action was cancelled."
+                pendingCommand = execution
+                return false
+            }
+            await refreshPCReachability()
+            if mockRoomControl.pcPower.backendReachable {
+                execution.status = .confirmed
+                execution.backendMessage = "PC online confirmed."
+                pendingCommand = execution
+                return true
+            }
+            bootProgress = min(0.9, bootProgress + 0.1)
+            mockRoomControl.pcPower.pcState = .booting(progress: bootProgress)
+            try? await Task.sleep(for: .milliseconds(750))
+        }
+        execution.status = .failed
+        execution.backendMessage = "PC did not come online within \(Int(pcActionQueueTimeoutSeconds)) seconds; queued action cancelled."
+        mockRoomControl.pcPower.pcState = .failed("Wake-on-LAN timed out")
+        pendingCommand = execution
+        return false
     }
 
     private func homeAssistantScriptID(for action: CompanionDashboardAction) -> String {

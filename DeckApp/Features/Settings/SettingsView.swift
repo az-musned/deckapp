@@ -357,7 +357,7 @@ struct SettingsView: View {
 
                 Section("PC command behavior") {
                     LabeledContent("Wake workflow") {
-                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs wake method + sensor")
+                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a smart plug trigger or Wake-on-LAN")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
                     }
                     LabeledContent("Queued-action timeout") {
@@ -365,6 +365,34 @@ struct SettingsView: View {
                     }
                     Slider(value: pcQueueTimeoutBinding, in: 10...120, step: 5)
                     Toggle("Wake PC before queued actions", isOn: wakeBeforeQueuedActionsBinding)
+                } footer: {
+                    Text("The smart plug trigger below takes priority when configured; Wake-on-LAN is the fallback.")
+                }
+
+                Section("Smart plug power-on") {
+                    Picker("Data center", selection: tuyaDataCenterBinding) {
+                        ForEach(TuyaDataCenter.allCases, id: \.self) { center in
+                            Text(center.displayName).tag(center)
+                        }
+                    }
+                    TextField("Access ID", text: tuyaAccessIDBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Access secret", text: tuyaAccessSecretBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Device ID", text: tuyaDeviceIDBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Switch code", text: tuyaSwitchCodeBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("Save Smart Plug Settings") { appState.savePCWakeConfiguration() }
+                } footer: {
+                    Text("From the Tuya IoT Platform (iot.tuya.com): create a Cloud project in your account's data center, subscribe it to the Device Control API, link your SmartLife app account under Devices, then copy the project's Access ID/Secret and the plug's Device ID from the device list. Switch code is usually “switch_1”.")
+                }
+
+                Section("Wake-on-LAN (fallback)") {
                     TextField("Wake-on-LAN MAC address", text: wakeOnLANMACBinding)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
@@ -377,7 +405,7 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(DesignToken.Color.warning)
                     }
-                    Button("Save PC Wake Settings") { appState.savePCWakeConfiguration() }
+                    Button("Save Wake-on-LAN Settings") { appState.savePCWakeConfiguration() }
                     Toggle("Confirm destructive commands", isOn: .constant(true))
                 }
 
@@ -489,6 +517,26 @@ struct SettingsView: View {
 
     private var wakeOnLANBroadcastBinding: Binding<String> {
         Binding(get: { appState.wakeOnLANConfiguration.broadcastAddress }, set: { appState.wakeOnLANConfiguration.broadcastAddress = $0 })
+    }
+
+    private var tuyaDataCenterBinding: Binding<TuyaDataCenter> {
+        Binding(get: { appState.tuyaDataCenter }, set: { appState.tuyaDataCenter = $0 })
+    }
+
+    private var tuyaAccessIDBinding: Binding<String> {
+        Binding(get: { appState.tuyaAccessID }, set: { appState.tuyaAccessID = $0 })
+    }
+
+    private var tuyaAccessSecretBinding: Binding<String> {
+        Binding(get: { appState.tuyaAccessSecret }, set: { appState.tuyaAccessSecret = $0 })
+    }
+
+    private var tuyaDeviceIDBinding: Binding<String> {
+        Binding(get: { appState.tuyaDeviceID }, set: { appState.tuyaDeviceID = $0 })
+    }
+
+    private var tuyaSwitchCodeBinding: Binding<String> {
+        Binding(get: { appState.tuyaSwitchCode }, set: { appState.tuyaSwitchCode = $0 })
     }
 
     private var companionAddressBinding: Binding<String> {
