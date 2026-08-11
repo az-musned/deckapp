@@ -281,21 +281,6 @@ final class LGTVStore {
         catch { lastError = error.localizedDescription }
     }
 
-    func movePointer(dx: Double, dy: Double, drag: Bool) async {
-        do { try await connection.sendPointerMove(dx: dx, dy: dy, drag: drag); lastError = nil }
-        catch { lastError = error.localizedDescription }
-    }
-
-    func clickPointer() async {
-        do { try await connection.sendPointerClick(); lastError = nil }
-        catch { lastError = error.localizedDescription }
-    }
-
-    func scrollPointer(dx: Double, dy: Double) async {
-        do { try await connection.sendPointerScroll(dx: dx, dy: dy); lastError = nil }
-        catch { lastError = error.localizedDescription }
-    }
-
     func refreshStateAndCapabilities() async {
         guard connectionState.isConnected else { return }
 

@@ -54,7 +54,6 @@ struct RemoteControlView: View {
         ScrollView {
             VStack(spacing: DesignToken.Spacing.medium) {
                 header
-                targetSwitcher
 
                 if target == .tv, tv.selectedDevice == nil {
                     ContentUnavailableView {
@@ -124,20 +123,6 @@ struct RemoteControlView: View {
         }
     }
 
-    /// Tapping the switcher directly is a manual override: it changes `target` without
-    /// touching `lastAutoDecisionKey`, so it sticks until the next real TV state change.
-    private var targetBinding: Binding<RemoteTarget> {
-        Binding(get: { target }, set: { target = $0 })
-    }
-
-    private var targetSwitcher: some View {
-        Picker("Remote target", selection: targetBinding) {
-            Label("PC", systemImage: "desktopcomputer").tag(RemoteTarget.pc)
-            Label("TV", systemImage: "tv").tag(RemoteTarget.tv)
-        }
-        .pickerStyle(.segmented)
-    }
-
     private var header: some View {
         RemoteHeaderBar(
             title: target == .pc ? "PC Remote" : "TV Remote",
@@ -145,7 +130,17 @@ struct RemoteControlView: View {
             statusText: target == .pc ? remote.connectionState.title : tv.connectionState.title,
             statusDetail: target == .pc ? remote.connectionState.latencyMilliseconds.map { "\($0) ms" } : nil
         ) {
-            HStack(spacing: DesignToken.Spacing.medium) {
+            HStack(spacing: DesignToken.Spacing.small) {
+                // Manual override: switches `target` directly without touching
+                // `lastAutoDecisionKey`, so it sticks until the next real TV state change.
+                RemoteIconButton(
+                    symbol: target == .pc ? "tv" : "desktopcomputer",
+                    accessibilityLabel: target == .pc ? "Switch to TV" : "Switch to PC"
+                ) {
+                    RemoteHaptics.heavy()
+                    target = target == .pc ? .tv : .pc
+                }
+
                 // A quick way to jump the TV home without leaving the PC remote —
                 // otherwise reaching it means switching targets first.
                 if target == .pc, tv.selectedDevice != nil {
@@ -172,30 +167,31 @@ struct RemoteControlView: View {
         switch target {
         case .pc:
             if remote.connectionState.acceptsInput || remote.connectionState == .connecting {
-                Button("Disconnect", role: .destructive) {
+                RemoteIconButton(symbol: "xmark.circle.fill", accessibilityLabel: "Disconnect", tint: DesignToken.Color.destructive) {
                     Task { await remote.disconnect() }
                 }
-                .buttonStyle(.bordered)
             } else {
-                Button {
+                RemoteIconButton(
+                    symbol: remote.pairingState.isPaired ? "link" : "checkmark.shield",
+                    accessibilityLabel: remote.pairingState.isPaired ? "Connect" : "Pair",
+                    tint: DesignToken.Color.accent
+                ) {
                     if remote.pairingState.isPaired {
                         Task { await remote.connect() }
                     } else {
                         showSettings = true
                     }
-                } label: {
-                    Label(remote.pairingState.isPaired ? "Connect" : "Pair", systemImage: remote.pairingState.isPaired ? "link" : "checkmark.shield")
                 }
-                .buttonStyle(.borderedProminent)
             }
         case .tv:
-            Button {
+            RemoteIconButton(
+                symbol: "power",
+                accessibilityLabel: tv.connectionState.isConnected ? "Turn Off TV" : "Wake TV",
+                tint: tv.connectionState.isConnected ? DesignToken.Color.destructive : DesignToken.Color.accent
+            ) {
                 RemoteHaptics.heavy()
                 Task { await tv.powerToggle() }
-            } label: {
-                Label(tv.connectionState.isConnected ? "Off" : "Wake", systemImage: "power")
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -420,10 +416,10 @@ struct RemoteControlView: View {
     }
 }
 
-/// The one touchpad surface for both targets. Drag deltas and taps get routed to the
-/// PC's pointer queue or the TV's webOS pointer socket depending on `target` — the same
-/// physical gesture, a different destination, so "one remote" is literal, not just a
-/// shared look.
+/// The shared touchpad card for both targets. On PC it's a real trackpad — drag
+/// deltas move the remote pointer. On TV it goes back to swipe-direction D-pad
+/// emulation (arrows via `LGTVRemoteButton`) rather than driving a live on-screen
+/// pointer; only the surrounding card, header, and full-screen affordance are shared.
 struct UnifiedTouchpadSurface: View {
     let target: RemoteTarget
     let remote: RemoteInputController
@@ -432,30 +428,36 @@ struct UnifiedTouchpadSurface: View {
     var onTouchActiveChanged: (Bool) -> Void = { _ in }
     var onExpand: (() -> Void)?
 
+    @State private var tvTranslation: CGSize = .zero
+    @State private var tvRepeatingDirection: LGTVRemoteButton?
+    @State private var tvRepeatTask: Task<Void, Never>?
+
     var body: some View {
         VStack(spacing: DesignToken.Spacing.small) {
-            HStack {
-                Label(statusText, systemImage: statusSymbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if target == .pc, remote.preferences.precisionMode {
-                    Text("PRECISION")
-                        .font(.caption2.bold())
-                        .foregroundStyle(DesignToken.Color.cyan)
-                }
-                if let onExpand {
-                    Button(action: onExpand) {
-                        Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(DesignToken.Color.accent)
-                }
-            }
-
             surface
                 .frame(maxHeight: .infinity)
+                .overlay(alignment: .top) {
+                    HStack {
+                        Label(statusText, systemImage: statusSymbol)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if target == .pc, remote.preferences.precisionMode {
+                            Text("PRECISION")
+                                .font(.caption2.bold())
+                                .foregroundStyle(DesignToken.Color.cyan)
+                        }
+                        if let onExpand {
+                            Button(action: onExpand) {
+                                Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(DesignToken.Color.accent)
+                        }
+                    }
+                    .padding(DesignToken.Spacing.small)
+                }
 
             HStack(spacing: DesignToken.Spacing.small) {
                 switch target {
@@ -470,12 +472,12 @@ struct UnifiedTouchpadSurface: View {
                     }
                 case .tv:
                     RemoteKeyButton(title: "Select", symbol: "checkmark.circle", enabled: true) {
-                        Task { await tv.clickPointer() }
-                        RemoteHaptics.click()
+                        RemoteHaptics.heavy()
+                        Task { await tv.send(.enter) }
                     }
                     RemoteKeyButton(title: "Back", symbol: "arrow.uturn.backward", enabled: true) {
+                        RemoteHaptics.heavy()
                         Task { await tv.send(.back) }
-                        RemoteHaptics.click()
                     }
                 }
             }
@@ -483,14 +485,28 @@ struct UnifiedTouchpadSurface: View {
     }
 
     private var statusText: String {
-        isDragging ? "Dragging" : (target == .pc ? remote.lastInteraction : "TV Pointer")
+        switch target {
+        case .pc: isDragging ? "Dragging" : remote.lastInteraction
+        case .tv: "Swipe to Navigate"
+        }
     }
 
     private var statusSymbol: String {
-        isDragging ? "hand.draw.fill" : (target == .pc ? "cursorarrow.motionlines" : "hand.point.up.left")
+        switch target {
+        case .pc: isDragging ? "hand.draw.fill" : "cursorarrow.motionlines"
+        case .tv: "hand.draw"
+        }
     }
 
+    @ViewBuilder
     private var surface: some View {
+        switch target {
+        case .pc: pcSurface
+        case .tv: tvSurface
+        }
+    }
+
+    private var pcSurface: some View {
         ZStack {
             RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
                 .fill(DesignToken.Color.card)
@@ -503,54 +519,131 @@ struct UnifiedTouchpadSurface: View {
                 Image(systemName: isDragging ? "hand.draw.fill" : "hand.point.up.left")
                     .font(.largeTitle)
                     .foregroundStyle(.secondary.opacity(0.45))
-                Text(isDragging ? "Dragging" : (target == .pc ? "Touchpad" : "TV Pointer"))
+                Text(isDragging ? "Dragging" : "Touchpad")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Text(target == .pc ? "Tap to click · Two fingers to scroll · Hold to drag" : "Drag to move the TV pointer · Tap to select")
+                Text("Tap to click · Two fingers to scroll · Hold to drag")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
             .allowsHitTesting(false)
 
             RemoteTouchpadSurface(
-                pointerMoved: { dx, dy in
-                    switch target {
-                    case .pc: remote.enqueuePointer(deltaX: dx, deltaY: dy)
-                    case .tv: Task { await tv.movePointer(dx: dx, dy: dy, drag: false) }
-                    }
-                },
-                scrolled: { dx, dy in
-                    switch target {
-                    case .pc: remote.enqueueScroll(deltaX: dx, deltaY: dy)
-                    case .tv: Task { await tv.scrollPointer(dx: dx, dy: dy) }
-                    }
-                },
+                pointerMoved: { dx, dy in remote.enqueuePointer(deltaX: dx, deltaY: dy) },
+                scrolled: { dx, dy in remote.enqueueScroll(deltaX: dx, deltaY: dy) },
                 tapped: {
-                    switch target {
-                    case .pc: remote.click(.left)
-                    case .tv: Task { await tv.clickPointer() }
-                    }
+                    remote.click(.left)
                     RemoteHaptics.click()
                 },
                 twoFingerTapped: {
-                    switch target {
-                    case .pc:
-                        guard remote.preferences.twoFingerRightClick else { return }
-                        remote.click(.right)
-                    case .tv:
-                        Task { await tv.send(.back) }
-                    }
+                    guard remote.preferences.twoFingerRightClick else { return }
+                    remote.click(.right)
                     RemoteHaptics.click()
                 },
                 dragChanged: { active in
                     isDragging = active
-                    if target == .pc { remote.setDrag(active: active) }
+                    remote.setDrag(active: active)
                 },
                 touchActiveChanged: onTouchActiveChanged
             )
             .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
         }
-        .frame(minHeight: 440)
+        .frame(minHeight: 560)
+    }
+
+    private var tvSurface: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
+                .fill(DesignToken.Color.card)
+                .overlay {
+                    RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous)
+                        .strokeBorder(DesignToken.Color.cardBorder, lineWidth: 0.75)
+                }
+
+            VStack(spacing: DesignToken.Spacing.small) {
+                Image(systemName: "hand.draw")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary.opacity(0.45))
+                Text("Swipe to Navigate")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Text("Swipe to navigate · Tap to select")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.secondary)
+
+            Circle()
+                .fill(.white.opacity(tvTranslation == .zero ? 0 : 0.2))
+                .frame(width: 54, height: 54)
+                .offset(
+                    x: min(max(tvTranslation.width * 0.28, -42), 42),
+                    y: min(max(tvTranslation.height * 0.28, -42), 42)
+                )
+                .animation(.snappy(duration: 0.18), value: tvTranslation)
+        }
+        .frame(minHeight: 560)
+        .contentShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
+        .gesture(
+            DragGesture(minimumDistance: 18, coordinateSpace: .local)
+                .onChanged { value in
+                    tvTranslation = value.translation
+                    let direction = tvDirection(for: value.translation)
+                    if direction != tvRepeatingDirection { beginTVRepeating(direction) }
+                }
+                .onEnded { _ in
+                    tvTranslation = .zero
+                    stopTVRepeating()
+                }
+        )
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                RemoteHaptics.heavy()
+                Task { await tv.send(.enter) }
+            }
+        )
+        // Tracks touch-down/up independently of the 18pt drag threshold above, both to
+        // suppress the enclosing screen's scroll from the first touch (not only once a
+        // real drag starts) and to match the PC surface's touchActiveChanged contract.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { _ in onTouchActiveChanged(true) }
+                .onEnded { _ in onTouchActiveChanged(false) }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("TV navigation touchpad")
+        .accessibilityHint("Swipe to navigate or double tap to select")
+        .accessibilityAction(named: "Select") { Task { await tv.send(.enter) } }
+        .onDisappear { stopTVRepeating() }
+    }
+
+    private func tvDirection(for translation: CGSize) -> LGTVRemoteButton {
+        if abs(translation.width) > abs(translation.height) {
+            return translation.width > 0 ? .right : .left
+        }
+        return translation.height > 0 ? .down : .up
+    }
+
+    private func beginTVRepeating(_ direction: LGTVRemoteButton) {
+        stopTVRepeating()
+        tvRepeatingDirection = direction
+        RemoteHaptics.heavy()
+        Task { await tv.send(direction) }
+        tvRepeatTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(380))
+            while !Task.isCancelled {
+                RemoteHaptics.heavy()
+                await tv.send(direction)
+                try? await Task.sleep(for: .milliseconds(140))
+            }
+        }
+    }
+
+    private func stopTVRepeating() {
+        tvRepeatTask?.cancel()
+        tvRepeatTask = nil
+        tvRepeatingDirection = nil
     }
 }
 
@@ -1085,11 +1178,15 @@ enum RemoteHaptics {
     }
 
     static func click() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let generator = UIImpactFeedbackGenerator(style: .heavy)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.85)
     }
 
     static func key() {
-        UISelectionFeedbackGenerator().selectionChanged()
+        let generator = UIImpactFeedbackGenerator(style: .rigid)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.85)
     }
 }
 

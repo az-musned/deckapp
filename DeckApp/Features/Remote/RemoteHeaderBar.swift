@@ -46,6 +46,7 @@ struct RemoteIconGlyph: View {
 struct RemoteIconButton: View {
     let symbol: String
     let accessibilityLabel: String
+    var tint: Color? = nil
     let action: () -> Void
 
     var body: some View {
@@ -53,7 +54,8 @@ struct RemoteIconButton: View {
             RemoteIconGlyph(symbol: symbol)
         }
         .buttonStyle(.plain)
-        .glassSurface(.interactive, cornerRadius: 999, interactive: true)
+        .foregroundStyle(tint ?? .primary)
+        .glassSurface(.interactive, cornerRadius: 999, tint: tint?.opacity(0.18), interactive: true)
         .accessibilityLabel(accessibilityLabel)
     }
 }
