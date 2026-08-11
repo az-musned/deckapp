@@ -38,8 +38,11 @@ final class AppState {
     var homeAssistantLaunchGameScriptEntityID: String
     var homeAssistantSleepPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
-    var iftttPowerOnEvent: String
-    var iftttWebhookKey = ""
+    var tuyaAccessID: String
+    var tuyaAccessSecret = ""
+    var tuyaDeviceID: String
+    var tuyaSwitchCode: String
+    var tuyaDataCenter: TuyaDataCenter
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
@@ -59,8 +62,8 @@ final class AppState {
     private let homeAssistantService: any HomeAssistantServiceProtocol
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
     private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
-    private let iftttKeychain = KeychainSecretStore(service: "com.example.DeckApp.ifttt")
-    private let iftttWebhookService: any IFTTTWebhookServing
+    private let tuyaKeychain = KeychainSecretStore(service: "com.example.DeckApp.tuya")
+    private let makeSmartPlugService: @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
     private let pcWakeOnLANService: any PCWakeOnLANServing
@@ -80,7 +83,9 @@ final class AppState {
         lgTV: LGTVStore = LGTVStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
         pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
-        iftttWebhookService: any IFTTTWebhookServing = IFTTTWebhookService()
+        makeSmartPlugService: @escaping @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering = {
+            TuyaCloudService(accessID: $0, accessSecret: $1, dataCenter: $2)
+        }
     ) {
         self.dashboardService = dashboardService
         self.commandService = commandService
@@ -91,11 +96,11 @@ final class AppState {
         self.lgTV = lgTV
         self.homeAssistantService = homeAssistantService
         self.pcWakeOnLANService = pcWakeOnLANService
-        self.iftttWebhookService = iftttWebhookService
+        self.makeSmartPlugService = makeSmartPlugService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
         goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
-        iftttWebhookKey = (try? iftttKeychain.load(account: "webhook-key")) ?? ""
+        tuyaAccessSecret = (try? tuyaKeychain.load(account: "access-secret")) ?? ""
         homeAssistantLightEntityID = UserDefaults.standard.string(forKey: "homeAssistant.roomLightEntityID") ?? ""
         homeAssistantClimateEntityID = UserDefaults.standard.string(forKey: "homeAssistant.climateEntityID") ?? ""
         homeAssistantTelevisionEntityID = UserDefaults.standard.string(forKey: "homeAssistant.televisionEntityID") ?? ""
@@ -105,7 +110,10 @@ final class AppState {
         homeAssistantLaunchGameScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.launchGameScriptEntityID") ?? ""
         homeAssistantSleepPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.sleepPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
-        iftttPowerOnEvent = UserDefaults.standard.string(forKey: "ifttt.powerOnEvent") ?? ""
+        tuyaAccessID = UserDefaults.standard.string(forKey: "tuya.accessID") ?? ""
+        tuyaDeviceID = UserDefaults.standard.string(forKey: "tuya.deviceID") ?? ""
+        tuyaSwitchCode = UserDefaults.standard.string(forKey: "tuya.switchCode") ?? "switch_1"
+        tuyaDataCenter = TuyaDataCenter(rawValue: UserDefaults.standard.string(forKey: "tuya.dataCenter") ?? "") ?? .westAmerica
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
@@ -282,8 +290,9 @@ final class AppState {
     }
 
     var hasConfiguredSmartPlugTrigger: Bool {
-        !iftttPowerOnEvent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !iftttWebhookKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !tuyaAccessID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !tuyaDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var hasConfiguredPCWakeWorkflow: Bool {
@@ -401,12 +410,15 @@ final class AppState {
         if let data = try? JSONEncoder().encode(wakeOnLANConfiguration) { UserDefaults.standard.set(data, forKey: "homeAssistant.wakeOnLAN") }
         UserDefaults.standard.set(pcActionQueueTimeoutSeconds, forKey: "pcAction.queueTimeoutSeconds")
         UserDefaults.standard.set(wakePCBeforeQueuedActions, forKey: "pcAction.wakeBeforeQueuedActions")
-        UserDefaults.standard.set(iftttPowerOnEvent.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "ifttt.powerOnEvent")
-        let key = iftttWebhookKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.isEmpty {
-            try? iftttKeychain.delete(account: "webhook-key")
+        UserDefaults.standard.set(tuyaAccessID.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.accessID")
+        UserDefaults.standard.set(tuyaDeviceID.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.deviceID")
+        UserDefaults.standard.set(tuyaSwitchCode.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "tuya.switchCode")
+        UserDefaults.standard.set(tuyaDataCenter.rawValue, forKey: "tuya.dataCenter")
+        let secret = tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if secret.isEmpty {
+            try? tuyaKeychain.delete(account: "access-secret")
         } else {
-            try? iftttKeychain.save(key, account: "webhook-key")
+            try? tuyaKeychain.save(secret, account: "access-secret")
         }
     }
 
@@ -758,7 +770,8 @@ final class AppState {
                 pendingCommand = execution
                 mockRoomControl.pcPower.plugState = .turningOn
                 mockRoomControl.pcPower.pcState = .supplyingPower
-                try await iftttWebhookService.trigger(event: iftttPowerOnEvent, key: iftttWebhookKey)
+                let smartPlugService = makeSmartPlugService(tuyaAccessID, tuyaAccessSecret, tuyaDataCenter)
+                try await smartPlugService.turnOn(deviceID: tuyaDeviceID, switchCode: tuyaSwitchCode)
                 mockRoomControl.pcPower.plugState = .on
             } catch {
                 execution.status = .failed
