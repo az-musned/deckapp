@@ -706,7 +706,7 @@ private struct MockPCPowerWidget: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(appState.mockRoomControl.pcPower.pcState.title)
                         .font(.title3.bold())
-                    Text("Wake-on-LAN: \(appState.mockRoomControl.pcPower.plugState.rawValue.capitalized)")
+                    Text("Plug: \(appState.mockRoomControl.pcPower.plugState.rawValue.capitalized)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

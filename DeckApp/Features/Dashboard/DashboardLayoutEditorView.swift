@@ -473,7 +473,7 @@ private extension RoomWidgetKind {
         case .light: "Power, brightness, and supported color controls."
         case .climate: "Temperature, HVAC, fan, and swing controls."
         case .television: "Volume, source, media, and directional remote."
-        case .pcPower: "Wake-on-LAN power, Windows Agent shutdown, remote, and screen share."
+        case .pcPower: "Smart plug power-on, Windows Agent shutdown, remote, and screen share."
         case .audioMixer: "Capability-driven audio channel levels and mute."
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .spotify: "Now playing, playback controls, like, and add to playlist."

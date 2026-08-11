@@ -312,7 +312,7 @@ struct SettingsView: View {
 
                 Section("PC command behavior") {
                     LabeledContent("Wake workflow") {
-                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a Wake-on-LAN MAC address")
+                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a smart plug trigger or Wake-on-LAN")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
                     }
                     LabeledContent("Queued-action timeout") {
@@ -320,6 +320,23 @@ struct SettingsView: View {
                     }
                     Slider(value: pcQueueTimeoutBinding, in: 10...120, step: 5)
                     Toggle("Wake PC before queued actions", isOn: wakeBeforeQueuedActionsBinding)
+                } footer: {
+                    Text("The smart plug trigger below takes priority when configured; Wake-on-LAN is the fallback.")
+                }
+
+                Section("Smart plug power-on") {
+                    TextField("IFTTT event name", text: iftttEventBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("IFTTT webhook key", text: iftttKeyBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("Save Smart Plug Settings") { appState.savePCWakeConfiguration() }
+                } footer: {
+                    Text("Create an IFTTT applet with a Webhooks trigger and a “Smart Life: turn device on” action for your PC's plug, then enter that trigger's event name and your Webhooks key (from ifttt.com/maker_webhooks/settings).")
+                }
+
+                Section("Wake-on-LAN (fallback)") {
                     TextField("Wake-on-LAN MAC address", text: wakeOnLANMACBinding)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
@@ -332,7 +349,7 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(DesignToken.Color.warning)
                     }
-                    Button("Save PC Wake Settings") { appState.savePCWakeConfiguration() }
+                    Button("Save Wake-on-LAN Settings") { appState.savePCWakeConfiguration() }
                     Toggle("Confirm destructive commands", isOn: .constant(true))
                 }
 
@@ -444,6 +461,14 @@ struct SettingsView: View {
 
     private var wakeOnLANBroadcastBinding: Binding<String> {
         Binding(get: { appState.wakeOnLANConfiguration.broadcastAddress }, set: { appState.wakeOnLANConfiguration.broadcastAddress = $0 })
+    }
+
+    private var iftttEventBinding: Binding<String> {
+        Binding(get: { appState.iftttPowerOnEvent }, set: { appState.iftttPowerOnEvent = $0 })
+    }
+
+    private var iftttKeyBinding: Binding<String> {
+        Binding(get: { appState.iftttWebhookKey }, set: { appState.iftttWebhookKey = $0 })
     }
 
     private var companionAddressBinding: Binding<String> {

@@ -38,6 +38,8 @@ final class AppState {
     var homeAssistantLaunchGameScriptEntityID: String
     var homeAssistantSleepPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
+    var iftttPowerOnEvent: String
+    var iftttWebhookKey = ""
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
@@ -57,6 +59,8 @@ final class AppState {
     private let homeAssistantService: any HomeAssistantServiceProtocol
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
     private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
+    private let iftttKeychain = KeychainSecretStore(service: "com.example.DeckApp.ifttt")
+    private let iftttWebhookService: any IFTTTWebhookServing
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
     private let pcWakeOnLANService: any PCWakeOnLANServing
@@ -75,7 +79,8 @@ final class AppState {
         remoteInput: RemoteInputController = RemoteInputController(),
         lgTV: LGTVStore = LGTVStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
-        pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService()
+        pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
+        iftttWebhookService: any IFTTTWebhookServing = IFTTTWebhookService()
     ) {
         self.dashboardService = dashboardService
         self.commandService = commandService
@@ -86,9 +91,11 @@ final class AppState {
         self.lgTV = lgTV
         self.homeAssistantService = homeAssistantService
         self.pcWakeOnLANService = pcWakeOnLANService
+        self.iftttWebhookService = iftttWebhookService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
         goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
+        iftttWebhookKey = (try? iftttKeychain.load(account: "webhook-key")) ?? ""
         homeAssistantLightEntityID = UserDefaults.standard.string(forKey: "homeAssistant.roomLightEntityID") ?? ""
         homeAssistantClimateEntityID = UserDefaults.standard.string(forKey: "homeAssistant.climateEntityID") ?? ""
         homeAssistantTelevisionEntityID = UserDefaults.standard.string(forKey: "homeAssistant.televisionEntityID") ?? ""
@@ -98,6 +105,7 @@ final class AppState {
         homeAssistantLaunchGameScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.launchGameScriptEntityID") ?? ""
         homeAssistantSleepPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.sleepPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
+        iftttPowerOnEvent = UserDefaults.standard.string(forKey: "ifttt.powerOnEvent") ?? ""
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
@@ -273,8 +281,14 @@ final class AppState {
             || !homeAssistantTelevisionEntityID.isEmpty || !homeAssistantPCPowerEntityID.isEmpty
     }
 
+    var hasConfiguredSmartPlugTrigger: Bool {
+        !iftttPowerOnEvent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !iftttWebhookKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var hasConfiguredPCWakeWorkflow: Bool {
-        wakeOnLANConfiguration.normalizedMACAddress != nil
+        hasConfiguredSmartPlugTrigger
+            || wakeOnLANConfiguration.normalizedMACAddress != nil
             || (!homeAssistantPCOnlineSensorEntityID.isEmpty
                 && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil))
     }
@@ -301,7 +315,7 @@ final class AppState {
         let mappings = IntegrationHealthItem(id: "mappings", title: "Entity Mappings", status: "\(mappedCount) mapped", detail: "Identifiers hidden from diagnostics", level: mappedCount > 0 ? .healthy : .informational, symbol: "link.circle.fill")
         let pc = IntegrationHealthItem(
             id: "pc", title: "PC State", status: hasConfiguredPCWakeWorkflow ? (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline") : "Not configured",
-            detail: hasConfiguredPCWakeWorkflow ? "Wake-on-LAN ready" : "Add a Wake-on-LAN MAC address in Settings", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
+            detail: hasConfiguredPCWakeWorkflow ? "Power-on trigger ready" : "Configure a smart plug or Wake-on-LAN in Settings", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
             symbol: "desktopcomputer"
         )
         let companion: IntegrationHealthItem = switch companionStatus {
@@ -387,6 +401,13 @@ final class AppState {
         if let data = try? JSONEncoder().encode(wakeOnLANConfiguration) { UserDefaults.standard.set(data, forKey: "homeAssistant.wakeOnLAN") }
         UserDefaults.standard.set(pcActionQueueTimeoutSeconds, forKey: "pcAction.queueTimeoutSeconds")
         UserDefaults.standard.set(wakePCBeforeQueuedActions, forKey: "pcAction.wakeBeforeQueuedActions")
+        UserDefaults.standard.set(iftttPowerOnEvent.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "ifttt.powerOnEvent")
+        let key = iftttWebhookKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if key.isEmpty {
+            try? iftttKeychain.delete(account: "webhook-key")
+        } else {
+            try? iftttKeychain.save(key, account: "webhook-key")
+        }
     }
 
     func toggleSceneActionFavorite(_ entityID: String) {
@@ -669,7 +690,9 @@ final class AppState {
     }
 
     func startPCControl() async {
-        guard wakeOnLANConfiguration.normalizedMACAddress != nil || !homeAssistantPCPowerEntityID.isEmpty else {
+        guard hasConfiguredSmartPlugTrigger
+                || wakeOnLANConfiguration.normalizedMACAddress != nil
+                || !homeAssistantPCPowerEntityID.isEmpty else {
             await startMockPC()
             return
         }
@@ -677,7 +700,7 @@ final class AppState {
     }
 
     /// Sends a graceful shutdown to the Windows Agent. Turning the PC back on happens
-    /// via Wake-on-LAN (see `wakePCAndWait`) rather than any remote power control here.
+    /// via the smart plug or Wake-on-LAN (see `wakePCAndWait`) rather than here.
     func shutdownPC() async {
         guard mockRoomControl.pcPower.pcState == .online else { return }
         var execution = CommandExecution(action: .mockControl("Shut Down PC"), status: .running, backendMessage: "Sending shutdown to the Windows Agent…")
@@ -708,7 +731,7 @@ final class AppState {
     }
 
     private func refreshPCReachability() async {
-        guard wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
+        guard hasConfiguredSmartPlugTrigger || wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
         let reachable = await remoteInput.isAgentReachable()
         guard mockRoomControl.pcPower.backendReachable != reachable else { return }
         mockRoomControl.pcPower.backendReachable = reachable
@@ -728,12 +751,26 @@ final class AppState {
         var execution = CommandExecution(action: .mockControl(label), status: .queued, backendMessage: "Queued while the PC wakes…")
         pendingCommand = execution
 
-        if let mac = wakeOnLANConfiguration.normalizedMACAddress {
+        if hasConfiguredSmartPlugTrigger {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Turning on the PC smart plug…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.plugState = .turningOn
+                mockRoomControl.pcPower.pcState = .supplyingPower
+                try await iftttWebhookService.trigger(event: iftttPowerOnEvent, key: iftttWebhookKey)
+                mockRoomControl.pcPower.plugState = .on
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to trigger the smart plug: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if let mac = wakeOnLANConfiguration.normalizedMACAddress {
             do {
                 execution.status = .running
                 execution.backendMessage = "Sending Wake-on-LAN…"
                 pendingCommand = execution
-                mockRoomControl.pcPower.plugState = .on
                 mockRoomControl.pcPower.pcState = .booting(progress: 0.2)
                 try await pcWakeOnLANService.wake(macAddress: mac, broadcastAddress: wakeOnLANConfiguration.broadcastAddress)
             } catch {
@@ -761,7 +798,7 @@ final class AppState {
             }
         } else {
             execution.status = .unavailable
-            execution.backendMessage = "Configure a Wake-on-LAN MAC address (or a Home Assistant smart plug) first."
+            execution.backendMessage = "Configure a smart plug trigger or Wake-on-LAN MAC address first."
             pendingCommand = execution
             return false
         }

@@ -197,7 +197,7 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A104")!,
                 title: "PC Power",
-                subtitle: "Wake-on-LAN power, remote, and screen share",
+                subtitle: "Smart plug power, remote, and screen share",
                 symbol: "powerplug.fill",
                 tintName: "orange",
                 kind: .pcPower,
