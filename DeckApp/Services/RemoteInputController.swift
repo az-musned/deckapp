@@ -266,6 +266,24 @@ final class RemoteInputController {
             : "This iPad credential was revoked by the Windows Agent and deleted from Keychain."
     }
 
+    /// Called when the Remote tab appears. A cold app launch can catch the network
+    /// stack or the Agent itself not fully ready yet, so `pairingState()` legitimately
+    /// returns `.unknown` (ambiguous, not "definitely unpaired") on the first try —
+    /// retry briefly before giving up, instead of leaving the remote disconnected
+    /// until the user manually backs out and re-enters the tab.
+    func autoConnectIfNeeded() async {
+        guard connectionState == .disconnected else { return }
+        for attempt in 0..<3 {
+            await refreshAgentSecurityState()
+            if pairingState.isPaired { break }
+            if case .unpaired = pairingState { return }
+            if case .revoked = pairingState { return }
+            if attempt < 2 { try? await Task.sleep(for: .seconds(1)) }
+        }
+        guard pairingState.isPaired, connectionState == .disconnected else { return }
+        await connect()
+    }
+
     func connect() async {
         connectionEpoch &+= 1
         await refreshAgentSecurityState()

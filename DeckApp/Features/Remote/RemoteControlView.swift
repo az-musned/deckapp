@@ -50,9 +50,7 @@ struct RemoteControlView: View {
     private var tv: LGTVStore { appState.lgTV }
 
     var body: some View {
-        GeometryReader { proxy in
-            let compact = proxy.size.width < 720
-
+        ScrollView {
             VStack(spacing: DesignToken.Spacing.medium) {
                 header
                 targetSwitcher
@@ -66,23 +64,18 @@ struct RemoteControlView: View {
                         Button("Set Up TV") { showTVSetup = true }
                             .buttonStyle(.borderedProminent)
                     }
-                    .frame(maxHeight: .infinity)
+                    .padding(.top, DesignToken.Spacing.large)
                 } else {
                     touchpad
-                        .frame(minHeight: compact ? 200 : 250, maxHeight: compact ? 250 : 320)
                     mediaRow
                     shortcutStrip
                     extraPanelPicker
-                    ScrollView {
-                        extraPanelContent
-                            .padding(.bottom, DesignToken.Spacing.medium)
-                    }
-                    .scrollIndicators(.hidden)
+                    extraPanelContent
                 }
             }
-            .padding(compact ? DesignToken.Spacing.medium : DesignToken.Spacing.large)
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .padding(DesignToken.Spacing.medium)
         }
+        .scrollIndicators(.hidden)
         .sheet(isPresented: $showSettings) {
             RemoteInputSettingsView(remote: remote)
         }
@@ -100,10 +93,7 @@ struct RemoteControlView: View {
             Text("The clipboard is read only after you choose an action. Its contents are not stored or logged.")
         }
         .task {
-            await remote.refreshAgentSecurityState()
-            if remote.pairingState.isPaired, remote.connectionState == .disconnected {
-                await remote.connect()
-            }
+            await remote.autoConnectIfNeeded()
             if tv.canAutomaticallyConnectSelectedDevice, !tv.connectionState.isConnected {
                 await tv.connect()
             }
@@ -154,6 +144,15 @@ struct RemoteControlView: View {
             statusDetail: target == .pc ? remote.connectionState.latencyMilliseconds.map { "\($0) ms" } : nil
         ) {
             HStack(spacing: DesignToken.Spacing.medium) {
+                // A quick way to jump the TV home without leaving the PC remote —
+                // otherwise reaching it means switching targets first.
+                if target == .pc, tv.selectedDevice != nil {
+                    RemoteIconButton(symbol: "house.fill", accessibilityLabel: "TV Home") {
+                        RemoteHaptics.heavy()
+                        Task { await tv.send(.home) }
+                    }
+                }
+
                 RemoteIconButton(
                     symbol: target == .pc ? "slider.horizontal.3" : "gearshape",
                     accessibilityLabel: target == .pc ? "Remote settings" : "TV settings"
@@ -284,40 +283,46 @@ struct RemoteControlView: View {
         .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.accent.opacity(0.16), interactive: true)
     }
 
+    /// Centered when the buttons fit the screen; falls back to a leading-aligned
+    /// horizontal scroll only when they don't (e.g. a long custom PC shortcut row).
     private var shortcutStrip: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: DesignToken.Spacing.small) {
-                switch target {
-                case .pc:
-                    ForEach(remote.preferences.shortcutRow, id: \.self) { key in
-                        RemoteKeyButton(title: key.displayTitle, symbol: key.displaySymbol, enabled: remote.connectionState.acceptsInput) {
-                            remote.sendKey(key)
-                        }
-                    }
-                    RemoteKeyButton(title: "Desktop", symbol: "macwindow", enabled: remote.connectionState.acceptsInput) {
-                        remote.sendKey(.desktop)
-                    }
-                    RemoteKeyButton(title: "Clipboard", symbol: "doc.on.clipboard", enabled: remote.connectionState.acceptsInput) {
-                        showClipboardActions = true
-                    }
-                case .tv:
-                    RemoteKeyButton(title: "Back", symbol: "arrow.uturn.backward", enabled: true) {
-                        RemoteHaptics.heavy()
-                        Task { await tv.send(.back) }
-                    }
-                    RemoteKeyButton(title: "Home", symbol: "house.fill", enabled: true) {
-                        RemoteHaptics.heavy()
-                        Task { await tv.send(.home) }
-                    }
-                    RemoteKeyButton(title: "Menu", symbol: "line.3.horizontal", enabled: true) {
-                        RemoteHaptics.heavy()
-                        Task { await tv.send(.menu) }
-                    }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DesignToken.Spacing.small) { shortcutButtons }
+                .padding(.vertical, 2)
+            ScrollView(.horizontal) {
+                HStack(spacing: DesignToken.Spacing.small) { shortcutButtons }
+                    .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutButtons: some View {
+        switch target {
+        case .pc:
+            ForEach(remote.preferences.shortcutRow, id: \.self) { key in
+                RemoteKeyButton(title: key.displayTitle, symbol: key.displaySymbol, enabled: remote.connectionState.acceptsInput) {
+                    remote.sendKey(key)
                 }
             }
-            .padding(.vertical, 2)
+            RemoteKeyButton(title: "Clipboard", symbol: "doc.on.clipboard", enabled: remote.connectionState.acceptsInput) {
+                showClipboardActions = true
+            }
+        case .tv:
+            RemoteKeyButton(title: "Back", symbol: "arrow.uturn.backward", enabled: true) {
+                RemoteHaptics.heavy()
+                Task { await tv.send(.back) }
+            }
+            RemoteKeyButton(title: "Home", symbol: "house.fill", enabled: true) {
+                RemoteHaptics.heavy()
+                Task { await tv.send(.home) }
+            }
+            RemoteKeyButton(title: "Menu", symbol: "line.3.horizontal", enabled: true) {
+                RemoteHaptics.heavy()
+                Task { await tv.send(.menu) }
+            }
         }
-        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
@@ -535,7 +540,7 @@ struct UnifiedTouchpadSurface: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
         }
-        .frame(minHeight: 220)
+        .frame(minHeight: 440)
     }
 }
 
@@ -1050,6 +1055,8 @@ struct RemoteKeyButton: View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, DesignToken.Spacing.small)
                 .padding(.vertical, DesignToken.Spacing.small)
