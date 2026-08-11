@@ -378,7 +378,8 @@ final class LGTVStore {
             return LGTVInput(
                 id: id,
                 name: object["label"]?.stringValue ?? object["name"]?.stringValue ?? id,
-                iconURL: object["icon"]?.stringValue.flatMap(URL.init(string:))
+                iconURL: object["icon"]?.stringValue.flatMap(URL.init(string:)),
+                appId: object["appId"]?.stringValue
             )
         }.filter { objectInput in
             let connectedObject = values.first { $0.objectValue?["id"]?.stringValue == objectInput.id }?.objectValue

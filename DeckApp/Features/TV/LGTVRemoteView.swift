@@ -11,8 +11,9 @@ struct LGTVRemoteView: View {
     var body: some View {
         GeometryReader { proxy in
             if let device = appState.lgTV.selectedDevice {
-                VStack(spacing: DesignToken.Spacing.small) {
+                VStack(spacing: DesignToken.Spacing.medium) {
                     remoteHeader
+                    sectionSelector
 
                     if selectedTab == .remote {
                         remoteContent(
@@ -50,36 +51,41 @@ struct LGTVRemoteView: View {
     }
 
     private var remoteHeader: some View {
-        HStack(spacing: DesignToken.Spacing.small) {
-            statusPill
-
-            Picker("TV remote section", selection: $selectedTab) {
-                Label("Remote", systemImage: "remote.fill").tag(LGTVExpandedTab.remote)
-                Label("Apps", systemImage: "square.grid.2x2.fill").tag(LGTVExpandedTab.apps)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 360)
-            .layoutPriority(1)
-            .onChange(of: selectedTab) { _, _ in RemoteHaptics.heavy() }
-
-            if appState.lgTV.devices.count > 1 {
-                Menu {
-                    ForEach(appState.lgTV.devices) { device in
-                        Button(device.name) { appState.lgTV.select(device.id) }
+        RemoteHeaderBar(
+            title: "TV Remote",
+            statusColor: statusColor,
+            statusText: appState.lgTV.connectionState.title
+        ) {
+            HStack(spacing: DesignToken.Spacing.medium) {
+                if appState.lgTV.devices.count > 1 {
+                    Menu {
+                        ForEach(appState.lgTV.devices) { device in
+                            Button(device.name) { appState.lgTV.select(device.id) }
+                        }
+                    } label: {
+                        RemoteIconGlyph(symbol: "tv.and.hifispeaker.fill")
                     }
-                } label: {
-                    Image(systemName: "tv.and.hifispeaker.fill")
-                        .frame(width: 34, height: 34)
+                    .buttonStyle(.plain)
+                    .glassSurface(.interactive, cornerRadius: 999, interactive: true)
+                    .accessibilityLabel("Select TV")
                 }
-                .accessibilityLabel("Select TV")
-            }
 
-            Button { showSetup = true } label: {
-                Image(systemName: "gearshape")
-                    .frame(width: 34, height: 34)
+                RemoteIconButton(symbol: "gearshape", accessibilityLabel: "TV settings") {
+                    showSetup = true
+                }
             }
-            .accessibilityLabel("TV settings")
         }
+    }
+
+    private var sectionSelector: some View {
+        Picker("TV remote section", selection: $selectedTab) {
+            Label("Remote", systemImage: "remote.fill").tag(LGTVExpandedTab.remote)
+            Label("Apps", systemImage: "square.grid.2x2.fill").tag(LGTVExpandedTab.apps)
+        }
+        .pickerStyle(.segmented)
+        .padding(DesignToken.Spacing.xSmall)
+        .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
+        .onChange(of: selectedTab) { _, _ in RemoteHaptics.heavy() }
     }
 
     @ViewBuilder
@@ -303,17 +309,6 @@ struct LGTVRemoteView: View {
         }
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 6) {
-            Circle().fill(statusColor).frame(width: 8, height: 8)
-            Text(appState.lgTV.connectionState.title).font(.caption.weight(.semibold))
-        }
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("TV connection: \(appState.lgTV.connectionState.title)")
-    }
-
     private var statusColor: Color {
         switch appState.lgTV.connectionState {
         case .connected: DesignToken.Color.positive
@@ -323,21 +318,17 @@ struct LGTVRemoteView: View {
     }
 
     private func remoteButton(_ title: String, symbol: String, button: LGTVRemoteButton) -> some View {
-        Button {
+        RemoteKeyButton(title: title, symbol: symbol, enabled: true) {
             RemoteHaptics.heavy()
             Task { await appState.lgTV.send(button) }
-        } label: {
-            Label(title, systemImage: symbol).frame(maxWidth: .infinity).padding(.vertical, 10)
-        }.buttonStyle(.plain).glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+        }
     }
 
     private func actionButton(_ title: String, symbol: String, action: @escaping () async -> Void) -> some View {
-        Button {
+        RemoteKeyButton(title: title, symbol: symbol, enabled: true) {
             RemoteHaptics.heavy()
             Task { await action() }
-        } label: {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
-        }.buttonStyle(.plain).glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+        }
     }
 
     private func playbackButton(_ symbol: String, _ command: LGTVPlaybackCommand) -> some View {
