@@ -160,8 +160,11 @@ struct LGTVRemoteView: View {
             Group {
                 if navigationMode == .touchpad {
                     LGTVTouchNavigationSurface(
-                        send: { button in
-                            Task { await appState.lgTV.send(button) }
+                        pointerMoved: { dx, dy in
+                            Task { await appState.lgTV.movePointer(dx: dx, dy: dy, drag: false) }
+                        },
+                        clicked: {
+                            Task { await appState.lgTV.clickPointer() }
                         },
                         onActiveChanged: { isTouchpadActive = $0 }
                     )
@@ -351,102 +354,56 @@ private enum LGTVExpandedTab: String {
     case apps
 }
 
+/// Drives the TV's on-screen Magic Remote pointer directly — drag moves the cursor with
+/// relative deltas over the webOS pointer socket, the same way a physical Magic Remote or
+/// the official webOS mobile app does, instead of emulating D-pad presses from swipe direction.
 struct LGTVTouchNavigationSurface: View {
-    let send: (LGTVRemoteButton) -> Void
+    let pointerMoved: (Double, Double) -> Void
+    let clicked: () -> Void
     var onActiveChanged: (Bool) -> Void = { _ in }
-    @State private var translation: CGSize = .zero
-    @State private var repeatingDirection: LGTVRemoteButton?
-    @State private var repeatTask: Task<Void, Never>?
+    @State private var isActive = false
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .fill(DesignToken.Color.card.opacity(0.72))
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        ZStack {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(DesignToken.Color.card.opacity(0.72))
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .strokeBorder(isActive ? .white.opacity(0.24) : .white.opacity(0.12), lineWidth: 1)
+                .animation(.snappy(duration: 0.18), value: isActive)
 
-                VStack(spacing: 8) {
-                    Image(systemName: "hand.draw")
-                        .font(.title2)
-                    Text("Swipe to navigate")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Tap to select")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundStyle(.secondary)
-
-                Circle()
-                    .fill(.white.opacity(translation == .zero ? 0 : 0.2))
-                    .frame(width: 54, height: 54)
-                    .offset(
-                        x: min(max(translation.width * 0.28, -42), 42),
-                        y: min(max(translation.height * 0.28, -42), 42)
-                    )
-                    .animation(.snappy(duration: 0.18), value: translation)
+            VStack(spacing: 8) {
+                Image(systemName: "hand.point.up.left")
+                    .font(.title2)
+                Text("Drag to move the TV pointer")
+                    .font(.subheadline.weight(.semibold))
+                Text("Tap to select")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-            .gesture(
-                DragGesture(minimumDistance: 18, coordinateSpace: .local)
-                    .onChanged { value in
-                        translation = value.translation
-                        let direction = direction(for: value.translation)
-                        if direction != repeatingDirection { beginRepeating(direction) }
-                    }
-                    .onEnded { _ in
-                        translation = .zero
-                        stopRepeating()
-                    }
-            )
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    send(.enter)
+            .foregroundStyle(.secondary)
+            .allowsHitTesting(false)
+
+            RemoteTouchpadSurface(
+                pointerMoved: { dx, dy in
+                    pointerMoved(dx, dy)
+                },
+                scrolled: { _, _ in },
+                tapped: {
+                    clicked()
                     RemoteHaptics.heavy()
+                },
+                twoFingerTapped: {},
+                dragChanged: { active in
+                    isActive = active
+                    onActiveChanged(active)
                 }
             )
-            // Tracks touch-down/up independently of the 18pt drag threshold above so the
-            // enclosing sheet's interactive-dismiss swipe is suppressed from the first touch,
-            // not only once a real drag starts.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onChanged { _ in onActiveChanged(true) }
-                    .onEnded { _ in onActiveChanged(false) }
-            )
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("TV navigation touchpad")
-            .accessibilityHint("Swipe to navigate or double tap to select")
-            .accessibilityAction(named: "Select") { send(.enter) }
-            .onDisappear { stopRepeating() }
+            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         }
-    }
-
-    private func direction(for translation: CGSize) -> LGTVRemoteButton {
-        if abs(translation.width) > abs(translation.height) {
-            return translation.width > 0 ? .right : .left
-        }
-        return translation.height > 0 ? .down : .up
-    }
-
-    private func beginRepeating(_ direction: LGTVRemoteButton) {
-        stopRepeating()
-        repeatingDirection = direction
-        send(direction)
-        RemoteHaptics.heavy()
-        repeatTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(380))
-            while !Task.isCancelled {
-                send(direction)
-                RemoteHaptics.heavy()
-                try? await Task.sleep(for: .milliseconds(140))
-            }
-        }
-    }
-
-    private func stopRepeating() {
-        repeatTask?.cancel()
-        repeatTask = nil
-        repeatingDirection = nil
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("TV navigation touchpad")
+        .accessibilityHint("Drag to move the TV pointer or double tap to select")
+        .accessibilityAction(named: "Select") { clicked() }
     }
 }
 

@@ -274,6 +274,9 @@ protocol LGTVConnectionServing: AnyObject {
     func request(_ request: LGTVRequest) async throws -> LGTVProtocolMessage
     func subscribe(_ request: LGTVRequest, handler: @escaping @MainActor (LGTVProtocolMessage) -> Void) async throws
     func sendRemoteButton(_ button: LGTVRemoteButton) async throws
+    func sendPointerMove(dx: Double, dy: Double, drag: Bool) async throws
+    func sendPointerClick() async throws
+    func sendPointerScroll(dx: Double, dy: Double) async throws
 }
 
 @MainActor
@@ -387,6 +390,31 @@ final class LGTVConnectionClient: LGTVConnectionServing {
     }
 
     func sendRemoteButton(_ button: LGTVRemoteButton) async throws {
+        let pointerTask = try await ensurePointerSocket()
+        let message = "type:button\nname:\(button.rawValue)\n\n"
+        try await pointerTask.send(.string(message))
+    }
+
+    /// Relative cursor movement over the Magic Remote pointer socket, mirroring how a
+    /// physical Magic Remote or the webOS mobile app moves the on-screen pointer.
+    func sendPointerMove(dx: Double, dy: Double, drag: Bool) async throws {
+        let pointerTask = try await ensurePointerSocket()
+        let message = "type:move\ndx:\(Int(dx))\ndy:\(Int(dy))\ndown:\(drag ? 1 : 0)\n\n"
+        try await pointerTask.send(.string(message))
+    }
+
+    func sendPointerClick() async throws {
+        let pointerTask = try await ensurePointerSocket()
+        try await pointerTask.send(.string("type:click\n\n"))
+    }
+
+    func sendPointerScroll(dx: Double, dy: Double) async throws {
+        let pointerTask = try await ensurePointerSocket()
+        let message = "type:scroll\ndx:\(Int(dx))\ndy:\(Int(dy))\n\n"
+        try await pointerTask.send(.string(message))
+    }
+
+    private func ensurePointerSocket() async throws -> URLSessionWebSocketTask {
         guard let session else { throw LGTVProtocolError.notConnected }
         if pointerTask == nil {
             if pointerConnectTask == nil {
@@ -411,8 +439,7 @@ final class LGTVConnectionClient: LGTVConnectionServing {
             }
         }
         guard let pointerTask else { throw LGTVProtocolError.missingPointerSocket }
-        let message = "type:button\nname:\(button.rawValue)\n\n"
-        try await pointerTask.send(.string(message))
+        return pointerTask
     }
 
     private func startReceiveLoop(_ task: URLSessionWebSocketTask) {
