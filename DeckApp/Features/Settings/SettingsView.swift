@@ -373,7 +373,7 @@ struct SettingsView: View {
                     Text("Rows and columns are zero-based. A successful HTTP response means Companion accepted the press; it does not confirm that the PC action completed.")
                 }
 
-                Section("PC command behavior") {
+                Section {
                     LabeledContent("Wake workflow") {
                         Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a smart plug trigger or Wake-on-LAN")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
@@ -383,11 +383,13 @@ struct SettingsView: View {
                     }
                     Slider(value: pcQueueTimeoutBinding, in: 10...120, step: 5)
                     Toggle("Wake PC before queued actions", isOn: wakeBeforeQueuedActionsBinding)
+                } header: {
+                    Text("PC command behavior")
                 } footer: {
                     Text("The smart plug trigger below takes priority when configured; Wake-on-LAN is the fallback.")
                 }
 
-                Section("Smart plug power-on") {
+                Section {
                     Picker("Data center", selection: tuyaDataCenterBinding) {
                         ForEach(TuyaDataCenter.allCases, id: \.self) { center in
                             Text(center.displayName).tag(center)
@@ -406,6 +408,8 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("Save Smart Plug Settings") { appState.savePCWakeConfiguration() }
+                } header: {
+                    Text("Smart plug power-on")
                 } footer: {
                     Text("From the Tuya IoT Platform (iot.tuya.com): create a Cloud project in your account's data center, subscribe it to the Device Control API, link your SmartLife app account under Devices, then copy the project's Access ID/Secret and the plug's Device ID from the device list. Switch code is usually “switch_1”.")
                 }

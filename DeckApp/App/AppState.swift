@@ -74,7 +74,7 @@ final class AppState {
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
     private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
     private let tuyaKeychain = KeychainSecretStore(service: "com.example.DeckApp.tuya")
-    private let makeSmartPlugService: @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering
+    private let makeSmartPlugService: @MainActor @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
     private let pcWakeOnLANService: any PCWakeOnLANServing
@@ -95,7 +95,7 @@ final class AppState {
         spotify: SpotifyStore = SpotifyStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
         pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
-        makeSmartPlugService: @escaping @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering = {
+        makeSmartPlugService: @escaping @MainActor @Sendable (String, String, TuyaDataCenter) -> any SmartPlugTriggering = {
             TuyaCloudService(accessID: $0, accessSecret: $1, dataCenter: $2)
         }
     ) {
