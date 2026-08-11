@@ -240,6 +240,13 @@ private struct WidgetConfigurationView: View {
                                appState.goveeDevice(for: widget.backend.identifier) == nil {
                                 Text("Govee · Unavailable device").tag("govee:\(widget.backend.identifier)")
                             }
+                            ForEach(appState.goveeGroups) { group in
+                                Text("Govee Group · \(group.name)").tag("goveegroup:\(group.id.uuidString)")
+                            }
+                            if widget.backend.backend == .goveeGroup,
+                               appState.goveeGroup(for: widget.backend.identifier) == nil {
+                                Text("Govee Group · Unavailable group").tag("goveegroup:\(widget.backend.identifier)")
+                            }
                         }
                     } header: {
                         Text("Device Mapping")
@@ -352,6 +359,7 @@ private struct WidgetConfigurationView: View {
         Binding {
             switch widget.backend.backend {
             case .govee: "govee:\(widget.backend.identifier)"
+            case .goveeGroup: "goveegroup:\(widget.backend.identifier)"
             case .homeAssistant: "ha:\(widget.backend.identifier)"
             default: "mock"
             }
@@ -371,6 +379,13 @@ private struct WidgetConfigurationView: View {
                 widget.subtitle = "Govee · \(device.deviceName)"
                 widget.capabilities = device.actionableCapabilities.map(\.descriptor)
                 if widget.title == "Room Lights" { widget.title = device.deviceName }
+            } else if selection.hasPrefix("goveegroup:") {
+                let identifier = String(selection.dropFirst(11))
+                guard let group = appState.goveeGroup(for: identifier) else { return }
+                widget.backend = WidgetBackendReference(backend: .goveeGroup, identifier: group.id.uuidString)
+                widget.subtitle = "Govee Group · \(group.name)"
+                widget.capabilities = appState.goveeGroupCapabilities(group).map(\.descriptor)
+                if widget.title == "Room Lights" { widget.title = group.name }
             }
         }
     }
@@ -488,6 +503,7 @@ private extension WidgetBackendKind {
         case .mock: "Mock"
         case .homeAssistant: "Home Assistant"
         case .govee: "Govee"
+        case .goveeGroup: "Govee Group"
         case .windowsAgent: "Windows Agent"
         case .companion: "Companion"
         case .lgWebOS: "LG webOS"

@@ -195,6 +195,17 @@ struct SettingsView: View {
                                 Label(device.deviceName, systemImage: "lightbulb.led")
                             }
                         }
+
+                        NavigationLink {
+                            GoveeGroupsView()
+                        } label: {
+                            LabeledContent {
+                                Text(appState.goveeGroups.isEmpty ? "None" : "\(appState.goveeGroups.count)")
+                                    .foregroundStyle(.secondary)
+                            } label: {
+                                Label("Groups", systemImage: "lightbulb.2.fill")
+                            }
+                        }
                     }
 
                     if !appState.goveeAPIKey.isEmpty {
@@ -375,7 +386,7 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("Wake workflow") {
-                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a smart plug trigger or Wake-on-LAN")
+                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a power-on Shortcut or Wake-on-LAN")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
                     }
                     LabeledContent("Queued-action timeout") {
@@ -386,32 +397,17 @@ struct SettingsView: View {
                 } header: {
                     Text("PC command behavior")
                 } footer: {
-                    Text("The smart plug trigger below takes priority when configured; Wake-on-LAN is the fallback.")
+                    Text("The power-on Shortcut below takes priority when configured; Wake-on-LAN is the fallback.")
                 }
 
                 Section {
-                    Picker("Data center", selection: tuyaDataCenterBinding) {
-                        ForEach(TuyaDataCenter.allCases, id: \.self) { center in
-                            Text(center.displayName).tag(center)
-                        }
-                    }
-                    TextField("Access ID", text: tuyaAccessIDBinding)
-                        .textInputAutocapitalization(.never)
+                    TextField("Shortcut name", text: pcPowerShortcutNameBinding)
                         .autocorrectionDisabled()
-                    SecureField("Access secret", text: tuyaAccessSecretBinding)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Device ID", text: tuyaDeviceIDBinding)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Switch code", text: tuyaSwitchCodeBinding)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button("Save Smart Plug Settings") { appState.savePCWakeConfiguration() }
+                    Button("Save Shortcut Settings") { appState.savePCWakeConfiguration() }
                 } header: {
-                    Text("Smart plug power-on")
+                    Text("Power-on Shortcut")
                 } footer: {
-                    Text("From the Tuya IoT Platform (iot.tuya.com): create a Cloud project in your account's data center, subscribe it to the Device Control API, link your SmartLife app account under Devices, then copy the project's Access ID/Secret and the plug's Device ID from the device list. Switch code is usually “switch_1”.")
+                    Text("Create a Shortcut in the Shortcuts app that turns on your PC (for example, by controlling its smart plug), then enter its exact name here. DeckApp runs it via shortcuts://run-shortcut; the Shortcut's own actions confirm the plug state, and DeckApp separately confirms the PC is reachable afterward.")
                 }
 
                 Section("Wake-on-LAN (fallback)") {
@@ -545,24 +541,8 @@ struct SettingsView: View {
         Binding(get: { appState.wakeOnLANConfiguration.broadcastAddress }, set: { appState.wakeOnLANConfiguration.broadcastAddress = $0 })
     }
 
-    private var tuyaDataCenterBinding: Binding<TuyaDataCenter> {
-        Binding(get: { appState.tuyaDataCenter }, set: { appState.tuyaDataCenter = $0 })
-    }
-
-    private var tuyaAccessIDBinding: Binding<String> {
-        Binding(get: { appState.tuyaAccessID }, set: { appState.tuyaAccessID = $0 })
-    }
-
-    private var tuyaAccessSecretBinding: Binding<String> {
-        Binding(get: { appState.tuyaAccessSecret }, set: { appState.tuyaAccessSecret = $0 })
-    }
-
-    private var tuyaDeviceIDBinding: Binding<String> {
-        Binding(get: { appState.tuyaDeviceID }, set: { appState.tuyaDeviceID = $0 })
-    }
-
-    private var tuyaSwitchCodeBinding: Binding<String> {
-        Binding(get: { appState.tuyaSwitchCode }, set: { appState.tuyaSwitchCode = $0 })
+    private var pcPowerShortcutNameBinding: Binding<String> {
+        Binding(get: { appState.pcPowerShortcutName }, set: { appState.pcPowerShortcutName = $0 })
     }
 
     private var companionAddressBinding: Binding<String> {

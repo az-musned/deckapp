@@ -67,6 +67,7 @@ enum WidgetBackendKind: String, Codable, Sendable {
     case mock
     case homeAssistant
     case govee
+    case goveeGroup
     case windowsAgent
     case companion
     case lgWebOS

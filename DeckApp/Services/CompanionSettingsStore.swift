@@ -7,6 +7,7 @@ struct CompanionSettingsStore: Sendable {
     private let rowKey = "companion.button.row"
     private let columnKey = "companion.button.column"
     private let controlDeckKey = "companion.controlDeck.items.v1"
+    private let goveeGroupsKey = "govee.groups.v1"
 
     private func dashboardMappingKey(for action: CompanionDashboardAction) -> String {
         "companion.dashboard.\(action.rawValue)"
@@ -67,5 +68,15 @@ struct CompanionSettingsStore: Sendable {
     func saveControlDeckItems(_ items: [ControlDeckItem]) {
         guard let data = try? JSONEncoder().encode(items) else { return }
         defaults.set(data, forKey: controlDeckKey)
+    }
+
+    func loadGoveeGroups() -> [GoveeDeviceGroup]? {
+        guard let data = defaults.data(forKey: goveeGroupsKey) else { return nil }
+        return try? JSONDecoder().decode([GoveeDeviceGroup].self, from: data)
+    }
+
+    func saveGoveeGroups(_ groups: [GoveeDeviceGroup]) {
+        guard let data = try? JSONEncoder().encode(groups) else { return }
+        defaults.set(data, forKey: goveeGroupsKey)
     }
 }

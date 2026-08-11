@@ -242,6 +242,18 @@ nonisolated struct GoveeStateRequest: Codable, Sendable, Equatable {
     }
 }
 
+nonisolated struct GoveeDeviceGroup: Codable, Sendable, Equatable, Hashable, Identifiable {
+    var id: UUID
+    var name: String
+    var memberDeviceIDs: [String]
+
+    init(id: UUID = UUID(), name: String, memberDeviceIDs: [String]) {
+        self.id = id
+        self.name = name
+        self.memberDeviceIDs = memberDeviceIDs
+    }
+}
+
 nonisolated enum GoveeClientError: LocalizedError, Sendable, Equatable {
     case missingAPIKey
     case unauthorized

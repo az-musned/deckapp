@@ -10,6 +10,8 @@ struct RoomControlWidgetView: View {
         case .light:
             if definition.backend.backend == .govee {
                 GoveeLightWidget(definition: definition)
+            } else if definition.backend.backend == .goveeGroup {
+                GoveeGroupLightWidget(definition: definition)
             } else {
                 MockLightWidget(definition: definition)
             }
@@ -141,6 +143,7 @@ private struct WidgetHeader: View {
         switch definition.backend.backend {
         case .homeAssistant: "LIVE"
         case .govee: "GOVEE"
+        case .goveeGroup: "GOVEE GROUP"
         case .windowsAgent: "AGENT"
         case .companion: "COMPANION"
         case .lgWebOS: "LG TV"
@@ -335,6 +338,211 @@ private struct GoveeLightWidget: View {
 
     private func optionName(_ device: GoveeDevice, _ capability: GoveeCapability, options: [GoveeCapabilityOption]) -> String {
         guard let value = appState.goveeValue(deviceID: device.id, capabilityID: capability.id) else { return "Choose" }
+        return options.first(where: { $0.value == value })?.name ?? value.displayValue
+    }
+
+    private func unitLabel(_ capability: GoveeCapability) -> String {
+        switch capability.parameters?.unit {
+        case "unit.percent": "%"
+        case "unit.colorTemperature": "K"
+        case .some(let unit): unit.replacingOccurrences(of: "unit.", with: " ")
+        case nil: ""
+        }
+    }
+}
+
+private struct GoveeGroupLightWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+
+    private let colorPresets: [(String, Int, Color)] = [
+        ("Red", 0xFF3B30, .red), ("Orange", 0xFF9500, .orange),
+        ("Yellow", 0xFFCC00, .yellow), ("Green", 0x34C759, .green),
+        ("Cyan", 0x32ADE6, .cyan), ("Blue", 0x007AFF, .blue),
+        ("Purple", 0xAF52DE, .purple), ("White", 0xFFFFFF, .white)
+    ]
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: availability)
+
+            if let group, !members.isEmpty {
+                powerControl(group)
+                ForEach(visibleCapabilities) { capability in
+                    capabilityControl(group, capability)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Govee Group Unavailable",
+                    systemImage: "lightbulb.slash",
+                    description: Text("Reconnect Govee or choose another group from Settings.")
+                )
+                .frame(maxHeight: 150)
+            }
+        }
+        .task(id: definition.backend.identifier) {
+            for member in members {
+                await appState.refreshGoveeState(deviceID: member.id)
+            }
+        }
+    }
+
+    private var group: GoveeDeviceGroup? {
+        appState.goveeGroup(for: definition.backend.identifier)
+    }
+
+    private var members: [GoveeDevice] {
+        guard let group else { return [] }
+        return appState.goveeGroupMembers(group)
+    }
+
+    private var availability: DeviceAvailability {
+        members.isEmpty ? .unavailable : .available
+    }
+
+    private var visibleCapabilities: [GoveeCapability] {
+        guard let group else { return [] }
+        let controls = appState.goveeGroupCapabilities(group).filter { $0.instance != "powerSwitch" }
+        return switch definition.size.presentationDensity {
+        case .compact: []
+        case .standard: Array(controls.prefix(2))
+        case .expanded: controls
+        }
+    }
+
+    @ViewBuilder
+    private func powerControl(_ group: GoveeDeviceGroup) -> some View {
+        if let capability = appState.goveeGroupCapabilities(group).first(where: { $0.instance == "powerSwitch" }) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isPowerOn(group, capability) ? "On" : "Off")
+                        .font(.title3.bold())
+                    Text("Power · \(members.count) light\(members.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    RemoteHaptics.heavy()
+                    let value = powerValue(capability, turnOn: !isPowerOn(group, capability))
+                    Task { await appState.setGoveeGroupCapability(groupID: group.id.uuidString, capabilityInstance: capability.instance, value: value) }
+                } label: {
+                    Image(systemName: "power")
+                        .frame(width: 42, height: 42)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(
+                    .interactive,
+                    cornerRadius: 999,
+                    tint: (isPowerOn(group, capability) ? DesignToken.Color.positive : DesignToken.Color.accent).opacity(0.2),
+                    interactive: true
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityControl(_ group: GoveeDeviceGroup, _ capability: GoveeCapability) -> some View {
+        if capability.instance == "colorRgb" {
+            VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+                Text("Color").font(.caption)
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(colorPresets, id: \.0) { preset in
+                        Button {
+                            RemoteHaptics.heavy()
+                            Task {
+                                await appState.setGoveeGroupCapability(
+                                    groupID: group.id.uuidString,
+                                    capabilityInstance: capability.instance,
+                                    value: .number(Double(preset.1))
+                                )
+                            }
+                        } label: {
+                            Circle()
+                                .fill(preset.2)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.0)
+                    }
+                }
+            }
+        } else if let options = capability.parameters?.options, !options.isEmpty {
+            HStack {
+                Text(capability.title).font(.caption)
+                Spacer()
+                Menu {
+                    ForEach(options) { option in
+                        Button(option.name) {
+                            RemoteHaptics.heavy()
+                            Task {
+                                await appState.setGoveeGroupCapability(
+                                    groupID: group.id.uuidString,
+                                    capabilityInstance: capability.instance,
+                                    value: option.value
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    Text(optionName(group, capability, options: options))
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .padding(DesignToken.Spacing.small)
+            .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.08))
+        } else if let range = capability.parameters?.range {
+            NumericControlRow(
+                title: capability.title,
+                value: numericBinding(group, capability, fallback: range.min),
+                range: range.min...range.max,
+                step: max(range.precision ?? 1, 1),
+                valueLabel: numericValue(group, capability, fallback: range.min).formatted(.number.precision(.fractionLength(0))) + unitLabel(capability)
+            ) {
+                let value = numericValue(group, capability, fallback: range.min)
+                Task {
+                    await appState.setGoveeGroupCapability(groupID: group.id.uuidString, capabilityInstance: capability.instance, value: .number(value))
+                }
+            }
+        }
+    }
+
+    private func numericBinding(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, fallback: Double) -> Binding<Double> {
+        Binding(
+            get: { numericValue(group, capability, fallback: fallback) },
+            set: { newValue in
+                for member in members {
+                    guard let memberCapability = member.actionableCapabilities.first(where: { $0.instance == capability.instance }) else { continue }
+                    appState.goveeControlValues[member.id, default: [:]][memberCapability.id] = .number(newValue)
+                }
+            }
+        )
+    }
+
+    private func numericValue(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, fallback: Double) -> Double {
+        guard case .number(let value) = appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) else { return fallback }
+        return value
+    }
+
+    private func isPowerOn(_ group: GoveeDeviceGroup, _ capability: GoveeCapability) -> Bool {
+        switch appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) {
+        case .number(let value): value != 0
+        case .bool(let value): value
+        case .string(let value): value.caseInsensitiveCompare("on") == .orderedSame
+        default: false
+        }
+    }
+
+    private func powerValue(_ capability: GoveeCapability, turnOn: Bool) -> GoveeValue {
+        let desiredName = turnOn ? "on" : "off"
+        return capability.parameters?.options?.first {
+            $0.name.caseInsensitiveCompare(desiredName) == .orderedSame
+        }?.value ?? .number(turnOn ? 1 : 0)
+    }
+
+    private func optionName(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, options: [GoveeCapabilityOption]) -> String {
+        guard let value = appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) else { return "Choose" }
         return options.first(where: { $0.value == value })?.name ?? value.displayValue
     }
 
