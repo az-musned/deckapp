@@ -45,6 +45,7 @@ struct RemoteControlView: View {
     @State private var showFullScreenTouchpad = false
     @State private var tvExtraPanel = TVExtraPanel.apps
     @State private var isTouchpadDragging = false
+    @State private var isTouchpadActive = false
 
     private var remote: RemoteInputController { appState.remoteInput }
     private var tv: LGTVStore { appState.lgTV }
@@ -76,6 +77,7 @@ struct RemoteControlView: View {
             .padding(DesignToken.Spacing.medium)
         }
         .scrollIndicators(.hidden)
+        .scrollDisabled(isTouchpadActive)
         .sheet(isPresented: $showSettings) {
             RemoteInputSettingsView(remote: remote)
         }
@@ -198,7 +200,13 @@ struct RemoteControlView: View {
     }
 
     private var touchpad: some View {
-        UnifiedTouchpadSurface(target: target, remote: remote, tv: tv, isDragging: $isTouchpadDragging) {
+        UnifiedTouchpadSurface(
+            target: target,
+            remote: remote,
+            tv: tv,
+            isDragging: $isTouchpadDragging,
+            onTouchActiveChanged: { isTouchpadActive = $0 }
+        ) {
             showFullScreenTouchpad = true
         }
         .opacity(interactionEnabled ? 1 : 0.52)
@@ -421,6 +429,7 @@ struct UnifiedTouchpadSurface: View {
     let remote: RemoteInputController
     let tv: LGTVStore
     @Binding var isDragging: Bool
+    var onTouchActiveChanged: (Bool) -> Void = { _ in }
     var onExpand: (() -> Void)?
 
     var body: some View {
@@ -536,7 +545,8 @@ struct UnifiedTouchpadSurface: View {
                 dragChanged: { active in
                     isDragging = active
                     if target == .pc { remote.setDrag(active: active) }
-                }
+                },
+                touchActiveChanged: onTouchActiveChanged
             )
             .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.panel, style: .continuous))
         }

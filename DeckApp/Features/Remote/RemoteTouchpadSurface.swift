@@ -7,6 +7,12 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
     let tapped: () -> Void
     let twoFingerTapped: () -> Void
     let dragChanged: (Bool) -> Void
+    /// Fires immediately on any touch down/up on this surface — distinct from
+    /// `dragChanged`, which only tracks the deliberate long-press-to-drag gesture.
+    /// The enclosing screen uses this to suspend its own scrolling for as long as a
+    /// finger is on the touchpad, so an ordinary pointer-move swipe doesn't also
+    /// scroll the page underneath it.
+    var touchActiveChanged: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -38,12 +44,20 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
         longPress.minimumPressDuration = 0.7
         longPress.allowableMovement = 14
 
+        // Recognizes instantly on touch-down purely to report "a finger is on the
+        // touchpad" — cancelsTouchesInView stays false so it never competes with or
+        // delays the gestures above.
+        let touchTracker = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.touchActive(_:)))
+        touchTracker.minimumPressDuration = 0
+        touchTracker.cancelsTouchesInView = false
+        touchTracker.delegate = context.coordinator
+
         tap.require(toFail: pointerPan)
         twoFingerTap.require(toFail: scrollPan)
         pointerPan.delegate = context.coordinator
         longPress.delegate = context.coordinator
 
-        [pointerPan, scrollPan, tap, twoFingerTap, longPress].forEach(view.addGestureRecognizer)
+        [pointerPan, scrollPan, tap, twoFingerTap, longPress, touchTracker].forEach(view.addGestureRecognizer)
         view.accessibilityLabel = "Windows PC touchpad"
         view.accessibilityHint = "Drag to move the pointer, tap to click, or use two fingers to scroll"
         return view
@@ -106,6 +120,17 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
                 parent.dragChanged(true)
             case .ended, .cancelled, .failed:
                 parent.dragChanged(false)
+            default:
+                break
+            }
+        }
+
+        @objc func touchActive(_ recognizer: UILongPressGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                parent.touchActiveChanged(true)
+            case .ended, .cancelled, .failed:
+                parent.touchActiveChanged(false)
             default:
                 break
             }
