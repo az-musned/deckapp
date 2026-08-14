@@ -15,6 +15,41 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("LG webOS TVs") {
+                    NavigationLink {
+                        LGTVDeviceSetupView()
+                    } label: {
+                        LabeledContent {
+                            Text(appState.lgTV.devices.isEmpty ? "Not configured" : "\(appState.lgTV.devices.count) saved")
+                                .foregroundStyle(.secondary)
+                        } label: {
+                            Label("Direct Local TV Control", systemImage: "tv.badge.wifi")
+                        }
+                    }
+                    LabeledContent("Connection", value: appState.lgTV.connectionState.title)
+                    Text("TV control stays on the local network. Pairing keys are stored per TV in Keychain, and live TV state is never persisted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("PC and TV Remote") {
+                    if appState.lgTV.tvState.inputs.isEmpty {
+                        Text("Connect to your TV to choose which input your PC is connected to.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("PC's TV Input", selection: pcTVInputBinding) {
+                            Text("Not set").tag(Optional<String>.none)
+                            ForEach(appState.lgTV.tvState.inputs) { input in
+                                Text(input.name).tag(Optional(input.id))
+                            }
+                        }
+                    }
+                    Text("When the TV shows this input, the Remote tab automatically switches to the PC remote.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Home Assistant") {
                     TextField("Local URL", text: Binding(get: { appState.homeAssistantConfiguration.localURL }, set: { appState.homeAssistantConfiguration.localURL = $0 }))
                         .textInputAutocapitalization(.never)
@@ -166,6 +201,17 @@ struct SettingsView: View {
                                 Label(device.deviceName, systemImage: "lightbulb.led")
                             }
                         }
+
+                        NavigationLink {
+                            GoveeGroupsView()
+                        } label: {
+                            LabeledContent {
+                                Text(appState.goveeGroups.isEmpty ? "None" : "\(appState.goveeGroups.count)")
+                                    .foregroundStyle(.secondary)
+                            } label: {
+                                Label("Groups", systemImage: "lightbulb.2.fill")
+                            }
+                        }
                     }
 
                     if !appState.goveeAPIKey.isEmpty {
@@ -175,6 +221,51 @@ struct SettingsView: View {
                     }
 
                     Text("The key is stored only in Keychain and sent only to Govee's official HTTPS API. It is never written to dashboard data or logs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Spotify") {
+                    TextField("Client ID", text: Binding(
+                        get: { appState.spotify.clientID },
+                        set: { appState.spotify.clientID = $0 }
+                    ))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    LabeledContent("Status") {
+                        HStack(spacing: DesignToken.Spacing.xSmall) {
+                            if appState.spotify.connectionStatus == .connecting {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(appState.spotify.connectionStatus.title)
+                                .foregroundStyle(spotifyStatusColor)
+                        }
+                    }
+
+                    if case .failed(let message) = appState.spotify.connectionStatus {
+                        LabeledContent("Reason") {
+                            Text(message)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(DesignToken.Color.destructive)
+                        }
+                        .font(.caption)
+                    }
+
+                    if appState.spotify.isConnected {
+                        Button("Disconnect Spotify", role: .destructive) {
+                            appState.spotify.disconnect()
+                        }
+                    } else {
+                        Button {
+                            Task { await appState.spotify.connect() }
+                        } label: {
+                            Label("Connect Spotify Account", systemImage: "music.note")
+                        }
+                        .disabled(appState.spotify.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.spotify.connectionStatus == .connecting)
+                    }
+
+                    Text("Create an app at developer.spotify.com, add redirect URI deckapp://spotify-callback, and paste its Client ID above. Tokens are stored only in Keychain.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -307,9 +398,9 @@ struct SettingsView: View {
                     Text("Rows and columns are zero-based. A successful HTTP response means Companion accepted the press; it does not confirm that the PC action completed.")
                 }
 
-                Section("PC command behavior") {
+                Section {
                     LabeledContent("Wake workflow") {
-                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs wake method + sensor")
+                        Text(appState.hasConfiguredPCWakeWorkflow ? "Ready" : "Needs a power-on Shortcut or Wake-on-LAN")
                             .foregroundStyle(appState.hasConfiguredPCWakeWorkflow ? DesignToken.Color.positive : .secondary)
                     }
                     LabeledContent("Queued-action timeout") {
@@ -317,6 +408,23 @@ struct SettingsView: View {
                     }
                     Slider(value: pcQueueTimeoutBinding, in: 10...120, step: 5)
                     Toggle("Wake PC before queued actions", isOn: wakeBeforeQueuedActionsBinding)
+                } header: {
+                    Text("PC command behavior")
+                } footer: {
+                    Text("The power-on Shortcut below takes priority when configured; Wake-on-LAN is the fallback.")
+                }
+
+                Section {
+                    TextField("Shortcut name", text: pcPowerShortcutNameBinding)
+                        .autocorrectionDisabled()
+                    Button("Save Shortcut Settings") { appState.savePCWakeConfiguration() }
+                } header: {
+                    Text("Power-on Shortcut")
+                } footer: {
+                    Text("Create a Shortcut in the Shortcuts app that turns on your PC (for example, by controlling its smart plug), then enter its exact name here. DeckApp runs it via shortcuts://run-shortcut; the Shortcut's own actions confirm the plug state, and DeckApp separately confirms the PC is reachable afterward.")
+                }
+
+                Section("Wake-on-LAN (fallback)") {
                     TextField("Wake-on-LAN MAC address", text: wakeOnLANMACBinding)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
@@ -329,12 +437,12 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(DesignToken.Color.warning)
                     }
-                    Button("Save PC Wake Settings") { appState.savePCWakeConfiguration() }
+                    Button("Save Wake-on-LAN Settings") { appState.savePCWakeConfiguration() }
                     Toggle("Confirm destructive commands", isOn: .constant(true))
                 }
 
                 Section("Integrations") {
-                    SettingsPlaceholderRow(title: "Gree", detail: "Through Home Assistant", symbol: "snowflake")
+                    SettingsPlaceholderRow(title: "Gree", detail: "Direct cloud control · Climate tab", symbol: "snowflake")
                     SettingsPlaceholderRow(title: "Smart Life", detail: "Through Home Assistant", symbol: "house")
                     SettingsPlaceholderRow(title: "TV control", detail: "Through Home Assistant", symbol: "tv")
                 }
@@ -415,6 +523,10 @@ struct SettingsView: View {
         Binding(get: { appState.homeAssistantPCPowerEntityID }, set: { appState.mapHomeAssistantEntity($0, to: .pcPower) })
     }
 
+    private var pcTVInputBinding: Binding<String?> {
+        Binding(get: { appState.pcTVInputID }, set: { appState.pcTVInputID = $0 })
+    }
+
     private var pcOnlineSensorEntityBinding: Binding<String> {
         Binding(get: { appState.homeAssistantPCOnlineSensorEntityID }, set: { appState.mapPCOnlineSensorEntity($0) })
     }
@@ -447,6 +559,10 @@ struct SettingsView: View {
         Binding(get: { appState.wakeOnLANConfiguration.broadcastAddress }, set: { appState.wakeOnLANConfiguration.broadcastAddress = $0 })
     }
 
+    private var pcPowerShortcutNameBinding: Binding<String> {
+        Binding(get: { appState.pcPowerShortcutName }, set: { appState.pcPowerShortcutName = $0 })
+    }
+
     private var companionAddressBinding: Binding<String> {
         Binding(get: { appState.companionAddress }, set: { appState.companionAddress = $0 })
     }
@@ -466,6 +582,15 @@ struct SettingsView: View {
         case .discovering: DesignToken.Color.warning
         case .failed: DesignToken.Color.destructive
         case .notConfigured: .secondary
+        }
+    }
+
+    private var spotifyStatusColor: Color {
+        switch appState.spotify.connectionStatus {
+        case .connected: DesignToken.Color.positive
+        case .connecting: DesignToken.Color.warning
+        case .failed: DesignToken.Color.destructive
+        case .notConnected: .secondary
         }
     }
 

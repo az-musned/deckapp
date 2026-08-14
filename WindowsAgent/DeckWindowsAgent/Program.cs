@@ -161,17 +161,23 @@ app.MapPost("/api/v1/agent/hotkey", async (HttpContext context, HotkeyRequest re
     }
 });
 
-app.MapPost("/api/v1/agent/power/shutdown", (HttpContext context, PairingService pairing) =>
+app.MapPost("/api/v1/agent/power/shutdown", (HttpContext context, PairingService pairing, AgentSafetyState safety) =>
 {
     if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    if (!safety.RemoteInputAllowed || safety.EmergencyInputDisabled)
+        return Results.Json(new { error = "Remote power control is unavailable." }, statusCode: StatusCodes.Status409Conflict);
+
     try
     {
-        Process.Start(new ProcessStartInfo("shutdown", "/s /t 5 /c \"Requested from DeckApp\"")
+        // A short delay lets this response reach DeckApp before Windows tears the agent process down.
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
+            FileName = "shutdown",
+            Arguments = "/s /t 5 /c \"Requested from DeckApp\"",
             UseShellExecute = false,
             CreateNoWindow = true
         });
-        return Results.Accepted();
+        return Results.Ok();
     }
     catch (Exception error)
     {
@@ -186,6 +192,8 @@ app.MapScreenStreamWebSocket();
 app.MapDiscordWebSocket();
 
 app.Run();
+
+internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
 
 static bool TryAuthenticate(HttpContext context, PairingService pairing)
 {

@@ -22,6 +22,7 @@ final class AppState {
     var goveeStatus: GoveeConnectionStatus = .notConfigured
     var goveeDevices: [GoveeDevice] = []
     var goveeControlValues: [String: [String: GoveeValue]] = [:]
+    var goveeGroups: [GoveeDeviceGroup] = []
     @ObservationIgnored private var goveeStateRefreshDates: [String: Date] = [:]
     var controlDeckItems: [ControlDeckItem]
     var homeAssistantConfiguration: HomeAssistantConfiguration
@@ -39,12 +40,26 @@ final class AppState {
     var homeAssistantSleepPCScriptEntityID: String
     var homeAssistantShutdownPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
+    var pcPowerShortcutName: String
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
     var sceneOrchestrationExecution: SceneOrchestrationExecution?
     var discordScreenShareHotkey: HotkeyCombo?
+    var pcTVInputID: String? {
+        didSet {
+            if let pcTVInputID {
+                UserDefaults.standard.set(pcTVInputID, forKey: "remote.pcTVInputID.v1")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "remote.pcTVInputID.v1")
+            }
+        }
+    }
     let remoteInput: RemoteInputController
+    let lgTV: LGTVStore
+    let spotify: SpotifyStore
+    let sleepTimer = SleepTimerController()
+    let greeClimate = GreeClimateController()
 
     let dashboardService: any DashboardService
     let commandService: any CommandService
@@ -56,10 +71,13 @@ final class AppState {
     private let homeAssistantService: any HomeAssistantServiceProtocol
     private let keychain = KeychainSecretStore(service: "com.example.DeckApp.home-assistant")
     private let goveeKeychain = KeychainSecretStore(service: "com.example.DeckApp.govee")
+    private let pcPowerShortcutService: any PCPowerShortcutTriggering
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
+    private let pcWakeOnLANService: any PCWakeOnLANServing
     private var activeHomeAssistantURL: URL?
     private var reconnectTask: Task<Void, Never>?
+    private var pcReachabilityTask: Task<Void, Never>?
     private var pendingHomeAssistantLightConfirmation: UUID?
     private var pendingHomeAssistantConfirmationEntityID: String?
 
@@ -70,7 +88,11 @@ final class AppState {
         companionSettings: CompanionSettingsStore = CompanionSettingsStore(),
         goveeService: any GoveeServing = GoveeClient(),
         remoteInput: RemoteInputController = RemoteInputController(),
-        homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient()
+        lgTV: LGTVStore = LGTVStore(),
+        spotify: SpotifyStore = SpotifyStore(),
+        homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
+        pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
+        pcPowerShortcutService: any PCPowerShortcutTriggering = PCPowerShortcutService()
     ) {
         self.dashboardService = dashboardService
         self.commandService = commandService
@@ -78,10 +100,15 @@ final class AppState {
         self.companionSettings = companionSettings
         self.goveeService = goveeService
         self.remoteInput = remoteInput
+        self.lgTV = lgTV
+        self.spotify = spotify
         self.homeAssistantService = homeAssistantService
+        self.pcWakeOnLANService = pcWakeOnLANService
+        self.pcPowerShortcutService = pcPowerShortcutService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
         goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
+        goveeGroups = companionSettings.loadGoveeGroups() ?? []
         homeAssistantLightEntityID = UserDefaults.standard.string(forKey: "homeAssistant.roomLightEntityID") ?? ""
         homeAssistantClimateEntityID = UserDefaults.standard.string(forKey: "homeAssistant.climateEntityID") ?? ""
         homeAssistantTelevisionEntityID = UserDefaults.standard.string(forKey: "homeAssistant.televisionEntityID") ?? ""
@@ -92,12 +119,14 @@ final class AppState {
         homeAssistantSleepPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.sleepPCScriptEntityID") ?? ""
         homeAssistantShutdownPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.shutdownPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
+        pcPowerShortcutName = UserDefaults.standard.string(forKey: "pcPower.shortcutName") ?? ""
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
         favoriteSceneActionIDs = Set(UserDefaults.standard.stringArray(forKey: "homeAssistant.favoriteSceneActions") ?? [])
         sceneOrchestrationExecution = nil
         discordScreenShareHotkey = (try? JSONDecoder().decode(HotkeyCombo.self, from: UserDefaults.standard.data(forKey: "discord.screenShareHotkey") ?? Data()))
+        pcTVInputID = UserDefaults.standard.string(forKey: "remote.pcTVInputID.v1")
         let savedButtonMapping = companionSettings.loadButtonMapping()
         let savedDashboardMappings = companionSettings.loadDashboardMappings()
         companionAddress = companionSettings.loadAddress()
@@ -111,14 +140,19 @@ final class AppState {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-showRemote") {
             selectedSection = .remote
+        } else if ProcessInfo.processInfo.arguments.contains("-showTV") {
+            selectedSection = .remote
+            UserDefaults.standard.set(RemoteTarget.tv.rawValue, forKey: "remote.target.v1")
         } else if ProcessInfo.processInfo.arguments.contains("-showScenes") {
             selectedSection = .scenes
         }
         #endif
+        sleepTimer.attach(appState: self)
     }
 
     func refresh() async {
         dashboard = await dashboardService.dashboard()
+        await connectCompanionIfConfigured()
         if !goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await saveAndDiscoverGovee()
         }
@@ -193,6 +227,55 @@ final class AppState {
         }
     }
 
+    func goveeGroup(for identifier: String) -> GoveeDeviceGroup? {
+        goveeGroups.first { $0.id.uuidString == identifier }
+    }
+
+    func goveeGroupMembers(_ group: GoveeDeviceGroup) -> [GoveeDevice] {
+        group.memberDeviceIDs.compactMap { goveeDevice(for: $0) }
+    }
+
+    func goveeGroupCapabilities(_ group: GoveeDeviceGroup) -> [GoveeCapability] {
+        let members = goveeGroupMembers(group)
+        guard let first = members.first else { return [] }
+        var shared = first.actionableCapabilities
+        for member in members.dropFirst() {
+            let instances = Set(member.actionableCapabilities.map(\.instance))
+            shared.removeAll { !instances.contains($0.instance) }
+        }
+        return shared
+    }
+
+    func goveeGroupValue(group: GoveeDeviceGroup, capabilityInstance: String) -> GoveeValue? {
+        guard let firstMember = goveeGroupMembers(group).first,
+              let capability = firstMember.actionableCapabilities.first(where: { $0.instance == capabilityInstance }) else { return nil }
+        return goveeValue(deviceID: firstMember.id, capabilityID: capability.id)
+    }
+
+    func setGoveeGroupCapability(groupID: String, capabilityInstance: String, value: GoveeValue) async {
+        guard let group = goveeGroup(for: groupID) else { return }
+        for member in goveeGroupMembers(group) {
+            guard let capability = member.actionableCapabilities.first(where: { $0.instance == capabilityInstance }) else { continue }
+            await setGoveeCapability(deviceID: member.id, capabilityID: capability.id, value: value)
+        }
+    }
+
+    func addGoveeGroup(name: String, memberDeviceIDs: [String]) {
+        goveeGroups.append(GoveeDeviceGroup(name: name, memberDeviceIDs: memberDeviceIDs))
+        companionSettings.saveGoveeGroups(goveeGroups)
+    }
+
+    func updateGoveeGroup(_ group: GoveeDeviceGroup) {
+        guard let index = goveeGroups.firstIndex(where: { $0.id == group.id }) else { return }
+        goveeGroups[index] = group
+        companionSettings.saveGoveeGroups(goveeGroups)
+    }
+
+    func removeGoveeGroup(id: UUID) {
+        goveeGroups.removeAll { $0.id == id }
+        companionSettings.saveGoveeGroups(goveeGroups)
+    }
+
     func saveAndTestHomeAssistant() async {
         homeAssistantState = .testing
         do {
@@ -263,9 +346,15 @@ final class AppState {
             || !homeAssistantTelevisionEntityID.isEmpty || !homeAssistantPCPowerEntityID.isEmpty
     }
 
+    var hasConfiguredPCPowerShortcut: Bool {
+        !pcPowerShortcutName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var hasConfiguredPCWakeWorkflow: Bool {
-        !homeAssistantPCOnlineSensorEntityID.isEmpty
-            && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil)
+        hasConfiguredPCPowerShortcut
+            || wakeOnLANConfiguration.normalizedMACAddress != nil
+            || (!homeAssistantPCOnlineSensorEntityID.isEmpty
+                && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil))
     }
 
     var integrationHealthItems: [IntegrationHealthItem] {
@@ -290,8 +379,8 @@ final class AppState {
                            homeAssistantShutdownPCScriptEntityID].filter { !$0.isEmpty }.count
         let mappings = IntegrationHealthItem(id: "mappings", title: "Entity Mappings", status: "\(mappedCount) mapped", detail: "Identifiers hidden from diagnostics", level: mappedCount > 0 ? .healthy : .informational, symbol: "link.circle.fill")
         let pc = IntegrationHealthItem(
-            id: "pc", title: "PC State", status: homeAssistantPCOnlineSensorEntityID.isEmpty ? "No sensor" : (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline"),
-            detail: hasConfiguredPCWakeWorkflow ? "Wake workflow ready" : "Wake workflow incomplete", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
+            id: "pc", title: "PC State", status: hasConfiguredPCWakeWorkflow ? (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline") : "Not configured",
+            detail: hasConfiguredPCWakeWorkflow ? "Power-on trigger ready" : "Configure a power-on Shortcut or Wake-on-LAN in Settings", level: mockRoomControl.pcPower.backendReachable ? .healthy : .informational,
             symbol: "desktopcomputer"
         )
         let companion: IntegrationHealthItem = switch companionStatus {
@@ -380,6 +469,7 @@ final class AppState {
         if let data = try? JSONEncoder().encode(wakeOnLANConfiguration) { UserDefaults.standard.set(data, forKey: "homeAssistant.wakeOnLAN") }
         UserDefaults.standard.set(pcActionQueueTimeoutSeconds, forKey: "pcAction.queueTimeoutSeconds")
         UserDefaults.standard.set(wakePCBeforeQueuedActions, forKey: "pcAction.wakeBeforeQueuedActions")
+        UserDefaults.standard.set(pcPowerShortcutName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "pcPower.shortcutName")
     }
 
     func toggleSceneActionFavorite(_ entityID: String) {
@@ -490,10 +580,13 @@ final class AppState {
     }
 
     func startNetworkMonitoring() {
+        startPCReachabilityMonitor()
         networkPathObserver.start { [weak self] isReachable in
             guard let self else { return }
+            self.lgTV.networkPathChanged(isReachable: isReachable)
             if isReachable {
                 self.scheduleHomeAssistantReconnect()
+                Task { await self.connectCompanionIfConfigured() }
             } else {
                 self.reconnectTask?.cancel()
                 self.homeAssistantWebSocketState = .disconnected
@@ -512,6 +605,19 @@ final class AppState {
         }
         await callMappedLightService(
             service: "toggle",
+            data: ["entity_id": .string(homeAssistantLightEntityID)],
+            label: "Light power"
+        )
+    }
+
+    func turnOffRoomLight() async {
+        guard !homeAssistantLightEntityID.isEmpty else {
+            if mockRoomControl.light.isOn { await toggleMockLight() }
+            return
+        }
+        guard mockRoomControl.light.isOn else { return }
+        await callMappedLightService(
+            service: "turn_off",
             data: ["entity_id": .string(homeAssistantLightEntityID)],
             label: "Light power"
         )
@@ -646,11 +752,36 @@ final class AppState {
     }
 
     func startPCControl() async {
-        guard !homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil else {
+        guard hasConfiguredPCPowerShortcut
+                || wakeOnLANConfiguration.normalizedMACAddress != nil
+                || !homeAssistantPCPowerEntityID.isEmpty else {
             await startMockPC()
             return
         }
         _ = await wakePCAndWait(label: "Start PC")
+    }
+
+    private func startPCReachabilityMonitor() {
+        pcReachabilityTask?.cancel()
+        pcReachabilityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshPCReachability()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func refreshPCReachability() async {
+        guard hasConfiguredPCPowerShortcut || wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
+        let reachable = await remoteInput.isAgentReachable()
+        guard mockRoomControl.pcPower.backendReachable != reachable else { return }
+        mockRoomControl.pcPower.backendReachable = reachable
+        if reachable {
+            mockRoomControl.pcPower.pcState = .online
+        } else if mockRoomControl.pcPower.pcState == .online {
+            mockRoomControl.pcPower.pcState = .offline
+        }
     }
 
     private func wakePCAndWait(label: String) async -> Bool {
@@ -658,16 +789,40 @@ final class AppState {
             pendingCommand = CommandExecution(action: .mockControl(label), status: .confirmed, backendMessage: "PC is already online.")
             return true
         }
-        guard let activeHomeAssistantURL else {
-            pendingCommand = CommandExecution(action: .mockControl(label), status: .unavailable, backendMessage: "Home Assistant is offline.")
-            return false
-        }
 
         var execution = CommandExecution(action: .mockControl(label), status: .queued, backendMessage: "Queued while the PC wakes…")
         pendingCommand = execution
-        do {
-            var wakeMethodUsed = false
-            if !homeAssistantPCPowerEntityID.isEmpty, mockRoomControl.pcPower.plugState != .on {
+
+        if hasConfiguredPCPowerShortcut {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Running \(pcPowerShortcutName) to power on the PC…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.plugState = .turningOn
+                mockRoomControl.pcPower.pcState = .supplyingPower
+                try await pcPowerShortcutService.run(shortcutName: pcPowerShortcutName)
+                mockRoomControl.pcPower.plugState = .on
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to run the PC power Shortcut: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if let mac = wakeOnLANConfiguration.normalizedMACAddress {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Sending Wake-on-LAN…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.pcState = .booting(progress: 0.2)
+                try await pcWakeOnLANService.wake(macAddress: mac, broadcastAddress: wakeOnLANConfiguration.broadcastAddress)
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to send Wake-on-LAN: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if let activeHomeAssistantURL, !homeAssistantPCPowerEntityID.isEmpty {
+            do {
                 execution.status = .running
                 execution.backendMessage = "Turning on the PC smart plug through Home Assistant…"
                 pendingCommand = execution
@@ -677,71 +832,47 @@ final class AppState {
                     HAServiceCall(domain: "switch", service: "turn_on", data: ["entity_id": .string(homeAssistantPCPowerEntityID)]),
                     baseURL: activeHomeAssistantURL, token: homeAssistantToken
                 )
-                wakeMethodUsed = true
-                try await Task.sleep(for: .seconds(1))
-            }
-
-            if wakePCBeforeQueuedActions, let mac = wakeOnLANConfiguration.normalizedMACAddress {
-                execution.status = .running
-                execution.backendMessage = "Sending Wake-on-LAN through Home Assistant…"
-                pendingCommand = execution
-                var data: [String: HAJSONValue] = ["mac": .string(mac)]
-                let broadcast = wakeOnLANConfiguration.broadcastAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !broadcast.isEmpty { data["broadcast_address"] = .string(broadcast) }
-                try await homeAssistantService.callService(
-                    HAServiceCall(domain: "wake_on_lan", service: "send_magic_packet", data: data),
-                    baseURL: activeHomeAssistantURL, token: homeAssistantToken
-                )
-                wakeMethodUsed = true
-            }
-
-            guard wakeMethodUsed else {
-                execution.status = .unavailable
-                execution.backendMessage = "Configure a smart plug or valid Wake-on-LAN MAC address first."
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = error.localizedDescription
                 pendingCommand = execution
                 return false
             }
-            guard !homeAssistantPCOnlineSensorEntityID.isEmpty else {
-                execution.status = .running
-                execution.backendMessage = "Wake request accepted. Map a PC online sensor to confirm startup."
-                pendingCommand = execution
-                return false
-            }
-
-            execution.status = .running
-            execution.backendMessage = "Wake request accepted. Waiting for the PC online sensor…"
-            pendingCommand = execution
-            let deadline = ContinuousClock.now.advanced(by: .seconds(pcActionQueueTimeoutSeconds))
-            while ContinuousClock.now < deadline {
-                if Task.isCancelled {
-                    execution.status = .failed
-                    execution.backendMessage = "Queued PC action was cancelled."
-                    pendingCommand = execution
-                    return false
-                }
-                if mockRoomControl.pcPower.backendReachable {
-                    execution.status = .confirmed
-                    execution.backendMessage = "PC online confirmed by Home Assistant."
-                    pendingCommand = execution
-                    return true
-                }
-                try await Task.sleep(for: .milliseconds(250))
-            }
-            execution.status = .failed
-            execution.backendMessage = "PC did not come online within \(Int(pcActionQueueTimeoutSeconds)) seconds; queued action cancelled."
-            pendingCommand = execution
-            return false
-        } catch is CancellationError {
-            execution.status = .failed
-            execution.backendMessage = "Queued PC action was cancelled."
-            pendingCommand = execution
-            return false
-        } catch {
-            execution.status = .failed
-            execution.backendMessage = error.localizedDescription
+        } else {
+            execution.status = .unavailable
+            execution.backendMessage = "Configure a power-on Shortcut or Wake-on-LAN MAC address first."
             pendingCommand = execution
             return false
         }
+
+        execution.status = .running
+        execution.backendMessage = "Wake request sent. Waiting for the PC to come online…"
+        pendingCommand = execution
+        var bootProgress = 0.2
+        let deadline = ContinuousClock.now.advanced(by: .seconds(pcActionQueueTimeoutSeconds))
+        while ContinuousClock.now < deadline {
+            if Task.isCancelled {
+                execution.status = .failed
+                execution.backendMessage = "Queued PC action was cancelled."
+                pendingCommand = execution
+                return false
+            }
+            await refreshPCReachability()
+            if mockRoomControl.pcPower.backendReachable {
+                execution.status = .confirmed
+                execution.backendMessage = "PC online confirmed."
+                pendingCommand = execution
+                return true
+            }
+            bootProgress = min(0.9, bootProgress + 0.1)
+            mockRoomControl.pcPower.pcState = .booting(progress: bootProgress)
+            try? await Task.sleep(for: .milliseconds(750))
+        }
+        execution.status = .failed
+        execution.backendMessage = "PC did not come online within \(Int(pcActionQueueTimeoutSeconds)) seconds; queued action cancelled."
+        mockRoomControl.pcPower.pcState = .failed("Wake-on-LAN timed out")
+        pendingCommand = execution
+        return false
     }
 
     private func homeAssistantScriptID(for action: CompanionDashboardAction) -> String {
@@ -954,6 +1085,11 @@ final class AppState {
     private func configureMappedWidget(kind: RoomWidgetKind, entityID: String) {
         guard let index = roomControlTemplate.widgets.firstIndex(where: { $0.kind == kind }) else { return }
         if entityID.isEmpty {
+            // An empty Home Assistant mapping only means that a previously mapped
+            // HA widget should return to its default. Direct integrations (such as
+            // LG webOS) are persisted in the dashboard layout and must survive app
+            // foregrounding and relaunches.
+            guard roomControlTemplate.widgets[index].backend.backend == .homeAssistant else { return }
             let fallback = RoomControlTemplate.roomControl.widgets.first { $0.kind == kind }
             if let fallback {
                 roomControlTemplate.widgets[index].backend = fallback.backend
@@ -1194,6 +1330,42 @@ final class AppState {
         await confirmMockControl("Discord deafen")
     }
 
+    func toggleSpotifyPlayback() async {
+        mockRoomControl.spotify.isPlaying.toggle()
+        await confirmMockControl("Spotify playback")
+    }
+
+    func skipSpotifyTrack(forward: Bool) async {
+        let count = MockSpotifyState.library.count
+        mockRoomControl.spotify.trackIndex = (mockRoomControl.spotify.trackIndex + (forward ? 1 : -1) + count) % count
+        mockRoomControl.spotify.progressSeconds = 0
+        await confirmMockControl(forward ? "Spotify skip" : "Spotify previous")
+    }
+
+    func toggleSpotifyLike() async {
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        if mockRoomControl.spotify.likedTrackIDs.contains(trackID) {
+            mockRoomControl.spotify.likedTrackIDs.remove(trackID)
+            await confirmMockControl("Removed from Liked Songs")
+        } else {
+            mockRoomControl.spotify.likedTrackIDs.insert(trackID)
+            await confirmMockControl("Added to Liked Songs")
+        }
+    }
+
+    func toggleCurrentSpotifyTrack(inPlaylistID playlistID: String) async {
+        guard let index = mockRoomControl.spotify.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let trackID = mockRoomControl.spotify.currentTrack.id
+        let playlistName = mockRoomControl.spotify.playlists[index].name
+        if let trackIndex = mockRoomControl.spotify.playlists[index].trackIDs.firstIndex(of: trackID) {
+            mockRoomControl.spotify.playlists[index].trackIDs.remove(at: trackIndex)
+            await confirmMockControl("Removed from \(playlistName)")
+        } else {
+            mockRoomControl.spotify.playlists[index].trackIDs.append(trackID)
+            await confirmMockControl("Added to \(playlistName)")
+        }
+    }
+
     func toggleMockTelevisionPower() async {
         guard mockRoomControl.television.isOnline else {
             pendingCommand = CommandExecution(
@@ -1247,6 +1419,7 @@ final class AppState {
     }
 
     func testCompanionConnection() async {
+        guard companionStatus != .testing else { return }
         companionStatus = .testing
         companionButtonTestStatus = .idle
 
@@ -1261,6 +1434,14 @@ final class AppState {
             companionStatus = .failed(error.localizedDescription)
             updateCompanionConnection(route: .offline, health: .unavailable)
         }
+    }
+
+    func connectCompanionIfConfigured() async {
+        guard !companionAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            companionStatus = .notConfigured
+            return
+        }
+        await testCompanionConnection()
     }
 
     func pressCompanionTestButton() async {
@@ -1341,6 +1522,11 @@ final class AppState {
         execution.backendMessage = accepted
             ? "Windows Agent accepted the shutdown request."
             : "The Windows Agent rejected the shutdown request."
+        if accepted {
+            mockRoomControl.pcPower.backendReachable = false
+            mockRoomControl.pcPower.pcState = .offline
+            mockRoomControl.pcPower.plugState = .off
+        }
         pendingCommand = execution
     }
 

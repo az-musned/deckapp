@@ -9,6 +9,7 @@ enum RoomWidgetKind: String, Codable, CaseIterable, Sendable {
     case companionActions
     case remoteInputLauncher
     case screenMirror
+    case spotify
     case discord
 }
 
@@ -68,8 +69,11 @@ enum WidgetBackendKind: String, Codable, Sendable {
     case mock
     case homeAssistant
     case govee
+    case goveeGroup
     case windowsAgent
     case companion
+    case lgWebOS
+    case spotify
 }
 
 struct WidgetBackendReference: Codable, Sendable, Equatable {
@@ -78,6 +82,8 @@ struct WidgetBackendReference: Codable, Sendable, Equatable {
 }
 
 struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
+    static let defaultGoXLRChannelIDs = ["mic", "chat", "music", "system"]
+
     let id: UUID
     var title: String
     var subtitle: String
@@ -92,6 +98,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
     /// Only meaningful when `kind == .screenMirror`. Defaults to `.mirror` for widgets
     /// saved before extend mode existed.
     var screenMirrorMode: ScreenMirrorMode?
+    /// Nil keeps older saved layouts on the four physical GoXLR-style defaults.
+    var audioMixerChannelIDs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -105,7 +113,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         capabilities: [DeviceCapabilityDescriptor],
         phoneSize: RoomWidgetSize? = nil,
         padSize: RoomWidgetSize? = nil,
-        screenMirrorMode: ScreenMirrorMode? = nil
+        screenMirrorMode: ScreenMirrorMode? = nil,
+        audioMixerChannelIDs: [String]? = nil
     ) {
         self.id = id
         self.title = title
@@ -119,6 +128,7 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
         self.phoneSize = phoneSize
         self.padSize = padSize
         self.screenMirrorMode = screenMirrorMode
+        self.audioMixerChannelIDs = audioMixerChannelIDs
     }
 
     var resolvedScreenMirrorMode: ScreenMirrorMode { screenMirrorMode ?? .mirror }
@@ -142,7 +152,8 @@ struct RoomWidgetDefinition: Identifiable, Codable, Sendable, Equatable {
             capabilities: capabilities,
             phoneSize: phoneSize,
             padSize: padSize,
-            screenMirrorMode: screenMirrorMode
+            screenMirrorMode: screenMirrorMode,
+            audioMixerChannelIDs: audioMixerChannelIDs
         )
     }
 }
@@ -198,24 +209,13 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A104")!,
                 title: "PC Power",
-                subtitle: "Mock Smart Life plug workflow",
+                subtitle: "Smart plug power, remote, and screen share",
                 symbol: "powerplug.fill",
                 tintName: "orange",
                 kind: .pcPower,
-                size: .medium,
+                size: .wide,
                 backend: WidgetBackendReference(backend: .mock, identifier: "mock.switch.pc_plug"),
                 capabilities: MockCapabilities.pcPower
-            ),
-            RoomWidgetDefinition(
-                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A105")!,
-                title: "PC Keyboard & Touchpad",
-                subtitle: "Authenticated Windows Agent remote",
-                symbol: "rectangle.and.hand.point.up.left.fill",
-                tintName: "cyan",
-                kind: .remoteInputLauncher,
-                size: .banner,
-                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "mock.windows-agent.remote-input"),
-                capabilities: MockCapabilities.remoteInput
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A107")!,
@@ -226,7 +226,30 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 kind: .audioMixer,
                 size: .wide,
                 backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.goxlr"),
-                capabilities: MockCapabilities.audioMixer
+                capabilities: MockCapabilities.audioMixer,
+                audioMixerChannelIDs: RoomWidgetDefinition.defaultGoXLRChannelIDs
+            ),
+            RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A110")!,
+                title: "Spotify",
+                subtitle: "Mock media session",
+                symbol: "music.note",
+                tintName: "green",
+                kind: .spotify,
+                size: .medium,
+                backend: WidgetBackendReference(backend: .spotify, identifier: "spotify.account"),
+                capabilities: MockCapabilities.spotify
+            ),
+            RoomWidgetDefinition(
+                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A111")!,
+                title: "Discord",
+                subtitle: "Authenticated Windows Agent voice bridge",
+                symbol: "person.wave.2.fill",
+                tintName: "purple",
+                kind: .discord,
+                size: .wide,
+                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.discord"),
+                capabilities: MockCapabilities.discord
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A108")!,
@@ -251,17 +274,6 @@ struct RoomControlTemplate: Identifiable, Codable, Sendable, Equatable {
                 backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.extend-display"),
                 capabilities: MockCapabilities.screenMirror,
                 screenMirrorMode: .extend
-            ),
-            RoomWidgetDefinition(
-                id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A109")!,
-                title: "Discord",
-                subtitle: "Authenticated Windows Agent voice bridge",
-                symbol: "person.wave.2.fill",
-                tintName: "purple",
-                kind: .discord,
-                size: .wide,
-                backend: WidgetBackendReference(backend: .windowsAgent, identifier: "windows-agent.discord"),
-                capabilities: MockCapabilities.discord
             ),
             RoomWidgetDefinition(
                 id: UUID(uuidString: "6A5A8A22-7B73-4F60-A6E1-B80D90C9A106")!,
@@ -321,13 +333,22 @@ enum MockCapabilities {
     static let pcPower: [DeviceCapabilityDescriptor] = [
         DeviceCapabilityDescriptor(id: "plug_power", kind: .power, name: "Supply Power"),
         DeviceCapabilityDescriptor(id: "pc_state", kind: .sensorValue, name: "PC State", isWritable: false),
-        DeviceCapabilityDescriptor(id: "start_pc", kind: .action, name: "Start PC")
+        DeviceCapabilityDescriptor(id: "start_pc", kind: .action, name: "Start PC"),
+        DeviceCapabilityDescriptor(id: "open_remote", kind: .action, name: "Open Remote"),
+        DeviceCapabilityDescriptor(id: "watch_screen", kind: .action, name: "Watch PC Screen"),
+        DeviceCapabilityDescriptor(id: "extend_display", kind: .action, name: "Extend Display")
     ]
 
     static let audioMixer: [DeviceCapabilityDescriptor] = [
         DeviceCapabilityDescriptor(id: "mic", kind: .numericRange, name: "Mic", numericRange: NumericRangeCapability(id: "mic", name: "Mic", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.76, isWritable: true)),
         DeviceCapabilityDescriptor(id: "music", kind: .numericRange, name: "Music", numericRange: NumericRangeCapability(id: "music", name: "Music", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.62, isWritable: true)),
         DeviceCapabilityDescriptor(id: "system", kind: .numericRange, name: "System", numericRange: NumericRangeCapability(id: "system", name: "System", minimum: 0, maximum: 1, step: 0.01, unit: nil, currentValue: 0.55, isWritable: true))
+    ]
+
+    static let spotify: [DeviceCapabilityDescriptor] = [
+        DeviceCapabilityDescriptor(id: "media_playback", kind: .mediaPlayback, name: "Playback"),
+        DeviceCapabilityDescriptor(id: "like", kind: .action, name: "Like Track"),
+        DeviceCapabilityDescriptor(id: "add_to_playlist", kind: .action, name: "Add to Playlist")
     ]
 
     static let discord: [DeviceCapabilityDescriptor] = [

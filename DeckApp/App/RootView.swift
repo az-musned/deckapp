@@ -4,6 +4,7 @@ struct RootView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
+    @State private var isSidebarCollapsed = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -15,8 +16,7 @@ struct RootView: View {
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 } else {
                     phoneLayout(width: proxy.size.width)
-                        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
-                        .clipped()
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
                 }
             }
         }
@@ -30,7 +30,11 @@ struct RootView: View {
                 await appState.remoteInput.goXLR.setAppActive(phase == .active)
                 await appState.remoteInput.screenMirror.setAppActive(phase == .active)
                 await appState.remoteInput.extendDisplay.setAppActive(phase == .active)
+                appState.lgTV.setAppActive(phase == .active)
+                if phase == .active { await appState.connectCompanionIfConfigured() }
+                if phase == .active { await appState.remoteInput.autoConnectIfNeeded() }
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
+                if phase != .active { await appState.greeClimate.deactivate() }
             }
         }
     }
@@ -38,32 +42,58 @@ struct RootView: View {
     private var tabletLayout: some View {
         @Bindable var appState = appState
 
-        return HStack(spacing: DesignToken.Spacing.large) {
-            SidebarNavigation(selection: $appState.selectedSection)
-                .frame(width: 220)
+        return HStack(spacing: DesignToken.Spacing.medium) {
+            SidebarNavigation(
+                selection: $appState.selectedSection,
+                isCollapsed: $isSidebarCollapsed
+            )
+            .frame(width: isSidebarCollapsed ? 76 : 220)
 
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+                .clipped()
         }
-        .padding(DesignToken.Spacing.large)
+        .padding(DesignToken.Spacing.medium)
+        .animation(DesignToken.Animation.responsive, value: isSidebarCollapsed)
     }
 
     private func phoneLayout(width: CGFloat) -> some View {
         @Bindable var appState = appState
 
-        return VStack(spacing: 0) {
-            selectedContent
-                .frame(width: width, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .clipped()
+        return TabView(selection: $appState.selectedSection) {
+            phoneTabSurface { DashboardView() }
+                .tabItem { Label("Dashboard", systemImage: AppSection.dashboard.symbol) }
+                .tag(AppSection.dashboard)
 
-            PhoneTabBar(selection: $appState.selectedSection)
-                .frame(width: max(width - (DesignToken.Spacing.small * 2), 0))
-                .padding(.horizontal, DesignToken.Spacing.small)
-                .padding(.bottom, DesignToken.Spacing.xSmall)
+            phoneTabSurface { RemoteControlView() }
+                .tabItem { Label("Remote", systemImage: AppSection.remote.symbol) }
+                .tag(AppSection.remote)
+
+            phoneTabSurface { ClimateView() }
+                .tabItem { Label("Climate", systemImage: AppSection.climate.symbol) }
+                .tag(AppSection.climate)
+
+            phoneTabSurface { SceneOrchestrationView() }
+                .tabItem { Label("Scenes", systemImage: AppSection.scenes.symbol) }
+                .tag(AppSection.scenes)
+
+            phoneTabSurface { SettingsView() }
+                .tabItem { Label("More", systemImage: AppSection.settings.symbol) }
+                .tag(AppSection.settings)
         }
+        .tint(DesignToken.Color.accent)
+        .background { AppBackground() }
         .frame(width: width, alignment: .leading)
-        .clipped()
+    }
+
+    private func phoneTabSurface<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack {
+            AppBackground()
+            content()
+        }
     }
 
     @ViewBuilder
@@ -75,6 +105,8 @@ struct RootView: View {
             SettingsView()
         case .remote:
             RemoteControlView()
+        case .climate:
+            ClimateView()
         case .scenes:
             SceneOrchestrationView()
         default:

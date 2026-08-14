@@ -19,7 +19,7 @@ actor GoXLRAudioAPIClient: GoXLRAudioAPIServing {
             configuration.waitsForConnectivity = true
             configuration.timeoutIntervalForRequest = 4
             configuration.timeoutIntervalForResource = 8
-            self.session = URLSession(configuration: configuration)
+            self.session = WindowsAgentURLSessionFactory.make(configuration: configuration)
         }
     }
 

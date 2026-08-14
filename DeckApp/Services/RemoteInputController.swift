@@ -6,7 +6,7 @@ import UIKit
 @Observable
 final class RemoteInputController {
     var connectionState: RemoteConnectionState = .disconnected
-    var selectedMode: RemoteControlMode = .touchpad
+    var selectedMode: RemoteControlMode = .keyboard
     var preferences = RemoteInputPreferences()
     var heldState = HeldRemoteInputState()
     var isDragging = false
@@ -199,6 +199,16 @@ final class RemoteInputController {
         }
     }
 
+    /// Sends a graceful shutdown command to the paired Windows Agent.
+    func shutdownAgent() async throws {
+        try await service.shutdown()
+    }
+
+    /// Cheap, unauthenticated reachability probe used to drive PC online/offline state.
+    func isAgentReachable() async -> Bool {
+        await service.isReachable()
+    }
+
     func refreshAgentSecurityState() async {
         let credential = try? pairingKeychain.load(account: pairingCredentialAccount)
         await service.restoreCredential(credential ?? nil)
@@ -209,6 +219,18 @@ final class RemoteInputController {
             && snapshot.audioSessions.isEmpty
             && snapshot.goXLRChannels.isEmpty
             && !snapshot.goXLRConnected ? nil : snapshot
+        goXLR.syncControlChannels(snapshot.goXLRChannels)
+    }
+
+    /// Refresh only the capability snapshot used by live GoXLR controls. Unlike the
+    /// broader security refresh, this is safe to call at a modest UI polling cadence.
+    func refreshGoXLRControlState() async {
+        guard pairingState.isPaired else { return }
+        let snapshot = await service.capabilitySnapshot()
+        // The transport represents request failures as an empty snapshot. Preserve the
+        // last known control values instead of making every fader jump to an empty state.
+        guard snapshot.goXLRConnected || !snapshot.goXLRChannels.isEmpty else { return }
+        capabilitySnapshot = snapshot
         goXLR.syncControlChannels(snapshot.goXLRChannels)
     }
 
@@ -255,6 +277,24 @@ final class RemoteInputController {
         pairingMessage = usesMockAgent
             ? "This iPad is no longer trusted by the mock Windows Agent."
             : "This iPad credential was revoked by the Windows Agent and deleted from Keychain."
+    }
+
+    /// Called when the Remote tab appears. A cold app launch can catch the network
+    /// stack or the Agent itself not fully ready yet, so `pairingState()` legitimately
+    /// returns `.unknown` (ambiguous, not "definitely unpaired") on the first try —
+    /// retry briefly before giving up, instead of leaving the remote disconnected
+    /// until the user manually backs out and re-enters the tab.
+    func autoConnectIfNeeded() async {
+        guard connectionState == .disconnected else { return }
+        for attempt in 0..<3 {
+            await refreshAgentSecurityState()
+            if pairingState.isPaired { break }
+            if case .unpaired = pairingState { return }
+            if case .revoked = pairingState { return }
+            if attempt < 2 { try? await Task.sleep(for: .seconds(1)) }
+        }
+        guard pairingState.isPaired, connectionState == .disconnected else { return }
+        await connect()
     }
 
     func connect() async {

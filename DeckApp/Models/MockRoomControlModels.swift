@@ -71,8 +71,11 @@ struct MockGoXLRState: Codable, Sendable, Equatable {
     var isConnected = true
     var channels = [
         MockMixerChannel(id: "mic", name: "Mic", level: 0.76, isMuted: false),
+        MockMixerChannel(id: "chat", name: "Chat", level: 0.68, isMuted: false),
         MockMixerChannel(id: "music", name: "Music", level: 0.62, isMuted: false),
-        MockMixerChannel(id: "system", name: "System", level: 0.55, isMuted: false)
+        MockMixerChannel(id: "system", name: "System", level: 0.55, isMuted: false),
+        MockMixerChannel(id: "game", name: "Game", level: 0.52, isMuted: true),
+        MockMixerChannel(id: "line", name: "Line In", level: 0.40, isMuted: false)
     ]
 }
 
@@ -90,6 +93,7 @@ struct MockRoomControlState: Codable, Sendable, Equatable {
     var television = MockTelevisionState()
     var pcPower = MockPCPowerState()
     var goXLR = MockGoXLRState()
+    var spotify = MockSpotifyState()
     var discord = MockDiscordState()
 
     static let preview = MockRoomControlState()

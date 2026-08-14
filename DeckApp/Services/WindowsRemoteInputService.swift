@@ -18,6 +18,8 @@ protocol WindowsRemoteInputServing: Sendable {
     func disconnect() async
     func sendHotkey(keyCode: Int, modifiers: Int) async throws
     func shutdownPC() async throws
+    func shutdown() async throws
+    func isReachable() async -> Bool
 }
 
 enum WindowsRemoteInputError: LocalizedError, Equatable {
@@ -284,6 +286,15 @@ actor MockWindowsRemoteInputService: WindowsRemoteInputServing {
     func shutdownPC() async throws {
         guard paired else { throw WindowsRemoteInputError.unpairedClient }
         try await Task.sleep(for: .milliseconds(150))
+    }
+
+    func shutdown() async throws {
+        guard paired else { throw WindowsRemoteInputError.unpairedClient }
+        try await Task.sleep(for: .milliseconds(120))
+    }
+
+    func isReachable() async -> Bool {
+        paired
     }
 
     func capturedEvents() -> [RemoteInputEvent] {

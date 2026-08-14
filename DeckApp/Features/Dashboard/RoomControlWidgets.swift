@@ -10,13 +10,19 @@ struct RoomControlWidgetView: View {
         case .light:
             if definition.backend.backend == .govee {
                 GoveeLightWidget(definition: definition)
+            } else if definition.backend.backend == .goveeGroup {
+                GoveeGroupLightWidget(definition: definition)
             } else {
                 MockLightWidget(definition: definition)
             }
         case .climate:
             MockClimateWidget(definition: definition, compact: compact)
         case .television:
-            MockTelevisionWidget(definition: definition, compact: compact)
+            if definition.backend.backend == .lgWebOS {
+                LGTVWidget(definition: definition, compact: compact)
+            } else {
+                MockTelevisionWidget(definition: definition, compact: compact)
+            }
         case .pcPower:
             MockPCPowerWidget(definition: definition)
         case .audioMixer:
@@ -27,6 +33,8 @@ struct RoomControlWidgetView: View {
             RemoteInputLauncherWidget(definition: definition)
         case .screenMirror:
             ScreenMirrorLauncherWidget(definition: definition)
+        case .spotify:
+            SpotifyWidgetContainer(definition: definition, compact: compact)
         case .discord:
             DiscordWidget(definition: definition, compact: compact)
         }
@@ -147,6 +155,7 @@ private struct CompanionActionsWidget: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button {
+                    RemoteHaptics.heavy()
                     showControlDeck = true
                 } label: {
                     Label("Open", systemImage: "square.grid.2x2.fill")
@@ -239,8 +248,11 @@ private struct WidgetHeader: View {
         switch definition.backend.backend {
         case .homeAssistant: "LIVE"
         case .govee: "GOVEE"
+        case .goveeGroup: "GOVEE GROUP"
         case .windowsAgent: "AGENT"
         case .companion: "COMPANION"
+        case .lgWebOS: "LG TV"
+        case .spotify: "SPOTIFY"
         case .mock: "MOCK"
         }
     }
@@ -316,6 +328,7 @@ private struct GoveeLightWidget: View {
                 }
                 Spacer()
                 Button {
+                    RemoteHaptics.heavy()
                     let value = powerValue(capability, turnOn: !isPowerOn(device, capability))
                     Task { await appState.setGoveeCapability(deviceID: device.id, capabilityID: capability.id, value: value) }
                 } label: {
@@ -341,6 +354,7 @@ private struct GoveeLightWidget: View {
                 HStack(spacing: DesignToken.Spacing.small) {
                     ForEach(colorPresets, id: \.0) { preset in
                         Button {
+                            RemoteHaptics.heavy()
                             Task {
                                 await appState.setGoveeCapability(
                                     deviceID: device.id,
@@ -366,6 +380,7 @@ private struct GoveeLightWidget: View {
                 Menu {
                     ForEach(options) { option in
                         Button(option.name) {
+                            RemoteHaptics.heavy()
                             Task {
                                 await appState.setGoveeCapability(
                                     deviceID: device.id,
@@ -441,6 +456,211 @@ private struct GoveeLightWidget: View {
     }
 }
 
+private struct GoveeGroupLightWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+
+    private let colorPresets: [(String, Int, Color)] = [
+        ("Red", 0xFF3B30, .red), ("Orange", 0xFF9500, .orange),
+        ("Yellow", 0xFFCC00, .yellow), ("Green", 0x34C759, .green),
+        ("Cyan", 0x32ADE6, .cyan), ("Blue", 0x007AFF, .blue),
+        ("Purple", 0xAF52DE, .purple), ("White", 0xFFFFFF, .white)
+    ]
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: availability)
+
+            if let group, !members.isEmpty {
+                powerControl(group)
+                ForEach(visibleCapabilities) { capability in
+                    capabilityControl(group, capability)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Govee Group Unavailable",
+                    systemImage: "lightbulb.slash",
+                    description: Text("Reconnect Govee or choose another group from Settings.")
+                )
+                .frame(maxHeight: 150)
+            }
+        }
+        .task(id: definition.backend.identifier) {
+            for member in members {
+                await appState.refreshGoveeState(deviceID: member.id)
+            }
+        }
+    }
+
+    private var group: GoveeDeviceGroup? {
+        appState.goveeGroup(for: definition.backend.identifier)
+    }
+
+    private var members: [GoveeDevice] {
+        guard let group else { return [] }
+        return appState.goveeGroupMembers(group)
+    }
+
+    private var availability: DeviceAvailability {
+        members.isEmpty ? .unavailable : .available
+    }
+
+    private var visibleCapabilities: [GoveeCapability] {
+        guard let group else { return [] }
+        let controls = appState.goveeGroupCapabilities(group).filter { $0.instance != "powerSwitch" }
+        return switch definition.size.presentationDensity {
+        case .compact: []
+        case .standard: Array(controls.prefix(2))
+        case .expanded: controls
+        }
+    }
+
+    @ViewBuilder
+    private func powerControl(_ group: GoveeDeviceGroup) -> some View {
+        if let capability = appState.goveeGroupCapabilities(group).first(where: { $0.instance == "powerSwitch" }) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isPowerOn(group, capability) ? "On" : "Off")
+                        .font(.title3.bold())
+                    Text("Power · \(members.count) light\(members.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    RemoteHaptics.heavy()
+                    let value = powerValue(capability, turnOn: !isPowerOn(group, capability))
+                    Task { await appState.setGoveeGroupCapability(groupID: group.id.uuidString, capabilityInstance: capability.instance, value: value) }
+                } label: {
+                    Image(systemName: "power")
+                        .frame(width: 42, height: 42)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(
+                    .interactive,
+                    cornerRadius: 999,
+                    tint: (isPowerOn(group, capability) ? DesignToken.Color.positive : DesignToken.Color.accent).opacity(0.2),
+                    interactive: true
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityControl(_ group: GoveeDeviceGroup, _ capability: GoveeCapability) -> some View {
+        if capability.instance == "colorRgb" {
+            VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+                Text("Color").font(.caption)
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(colorPresets, id: \.0) { preset in
+                        Button {
+                            RemoteHaptics.heavy()
+                            Task {
+                                await appState.setGoveeGroupCapability(
+                                    groupID: group.id.uuidString,
+                                    capabilityInstance: capability.instance,
+                                    value: .number(Double(preset.1))
+                                )
+                            }
+                        } label: {
+                            Circle()
+                                .fill(preset.2)
+                                .frame(width: 24, height: 24)
+                                .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.0)
+                    }
+                }
+            }
+        } else if let options = capability.parameters?.options, !options.isEmpty {
+            HStack {
+                Text(capability.title).font(.caption)
+                Spacer()
+                Menu {
+                    ForEach(options) { option in
+                        Button(option.name) {
+                            RemoteHaptics.heavy()
+                            Task {
+                                await appState.setGoveeGroupCapability(
+                                    groupID: group.id.uuidString,
+                                    capabilityInstance: capability.instance,
+                                    value: option.value
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    Text(optionName(group, capability, options: options))
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .padding(DesignToken.Spacing.small)
+            .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.08))
+        } else if let range = capability.parameters?.range {
+            NumericControlRow(
+                title: capability.title,
+                value: numericBinding(group, capability, fallback: range.min),
+                range: range.min...range.max,
+                step: max(range.precision ?? 1, 1),
+                valueLabel: numericValue(group, capability, fallback: range.min).formatted(.number.precision(.fractionLength(0))) + unitLabel(capability)
+            ) {
+                let value = numericValue(group, capability, fallback: range.min)
+                Task {
+                    await appState.setGoveeGroupCapability(groupID: group.id.uuidString, capabilityInstance: capability.instance, value: .number(value))
+                }
+            }
+        }
+    }
+
+    private func numericBinding(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, fallback: Double) -> Binding<Double> {
+        Binding(
+            get: { numericValue(group, capability, fallback: fallback) },
+            set: { newValue in
+                for member in members {
+                    guard let memberCapability = member.actionableCapabilities.first(where: { $0.instance == capability.instance }) else { continue }
+                    appState.goveeControlValues[member.id, default: [:]][memberCapability.id] = .number(newValue)
+                }
+            }
+        )
+    }
+
+    private func numericValue(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, fallback: Double) -> Double {
+        guard case .number(let value) = appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) else { return fallback }
+        return value
+    }
+
+    private func isPowerOn(_ group: GoveeDeviceGroup, _ capability: GoveeCapability) -> Bool {
+        switch appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) {
+        case .number(let value): value != 0
+        case .bool(let value): value
+        case .string(let value): value.caseInsensitiveCompare("on") == .orderedSame
+        default: false
+        }
+    }
+
+    private func powerValue(_ capability: GoveeCapability, turnOn: Bool) -> GoveeValue {
+        let desiredName = turnOn ? "on" : "off"
+        return capability.parameters?.options?.first {
+            $0.name.caseInsensitiveCompare(desiredName) == .orderedSame
+        }?.value ?? .number(turnOn ? 1 : 0)
+    }
+
+    private func optionName(_ group: GoveeDeviceGroup, _ capability: GoveeCapability, options: [GoveeCapabilityOption]) -> String {
+        guard let value = appState.goveeGroupValue(group: group, capabilityInstance: capability.instance) else { return "Choose" }
+        return options.first(where: { $0.value == value })?.name ?? value.displayValue
+    }
+
+    private func unitLabel(_ capability: GoveeCapability) -> String {
+        switch capability.parameters?.unit {
+        case "unit.percent": "%"
+        case "unit.colorTemperature": "K"
+        case .some(let unit): unit.replacingOccurrences(of: "unit.", with: " ")
+        case nil: ""
+        }
+    }
+}
+
 private struct MockLightWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
@@ -454,6 +674,7 @@ private struct MockLightWidget: View {
                     .font(.title3.bold())
                 Spacer()
                 Button {
+                    RemoteHaptics.heavy()
                     Task { await appState.toggleRoomLightControl() }
                 } label: {
                     Image(systemName: "power")
@@ -569,7 +790,10 @@ private struct MockClimateWidget: View {
     }
 
     private func temperatureButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
             Image(systemName: symbol)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, DesignToken.Spacing.small)
@@ -601,6 +825,7 @@ private struct MockClimateWidget: View {
         Menu {
             ForEach(options, id: \.self) { option in
                 Button(display(option)) {
+                    RemoteHaptics.heavy()
                     set(option)
                     Task { await appState.setClimateOption(capability, value: option) }
                 }
@@ -661,6 +886,7 @@ private struct MockTelevisionWidget: View {
                 Spacer()
                 if supports(.power) {
                     Button {
+                        RemoteHaptics.heavy()
                         Task { await appState.toggleTelevisionControl() }
                     } label: {
                         Image(systemName: "power").frame(width: 42, height: 42)
@@ -673,7 +899,10 @@ private struct MockTelevisionWidget: View {
             if supports(.sourceSelection), !sourceOptions.isEmpty {
                 Menu {
                     ForEach(sourceOptions, id: \.self) { source in
-                        Button(source) { Task { await appState.selectTelevisionSource(source) } }
+                        Button(source) {
+                            RemoteHaptics.heavy()
+                            Task { await appState.selectTelevisionSource(source) }
+                        }
                     }
                 } label: {
                     LabeledContent("Source") {
@@ -763,7 +992,10 @@ private struct DirectionalRemoteControl: View {
     }
 
     private func remoteButton(_ symbol: String, command: String) -> some View {
-        Button { send(command) } label: {
+        Button {
+            RemoteHaptics.heavy()
+            send(command)
+        } label: {
             Image(systemName: symbol)
                 .frame(width: 42, height: 34)
         }
@@ -777,6 +1009,8 @@ private struct MockPCPowerWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
     @State private var showShutdownConfirmation = false
+    @State private var showFullScreenMirror = false
+    @State private var showFullScreenExtend = false
 
     var body: some View {
         DashboardCard {
@@ -799,38 +1033,81 @@ private struct MockPCPowerWidget: View {
                     .tint(DesignToken.Color.warning)
             }
 
-            Button {
-                Task { await appState.startPCControl() }
-            } label: {
-                Label("Turn On and Start PC", systemImage: "power")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, DesignToken.Spacing.small)
-            }
-            .buttonStyle(.plain)
-            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
-            .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
-
-            Button {
-                showShutdownConfirmation = true
-            } label: {
-                Label("Shut Down PC", systemImage: "power")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, DesignToken.Spacing.small)
-            }
-            .buttonStyle(.plain)
-            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
-            .disabled(appState.mockRoomControl.pcPower.pcState == .offline)
-            .confirmationDialog("Shut down the PC?", isPresented: $showShutdownConfirmation, titleVisibility: .visible) {
-                Button("Shut Down PC", role: .destructive) {
-                    Task { await appState.shutdownPC() }
+            if appState.mockRoomControl.pcPower.pcState == .online {
+                Button(role: .destructive) {
+                    RemoteHaptics.heavy()
+                    showShutdownConfirmation = true
+                } label: {
+                    Label("Shut Down PC", systemImage: "power")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("The PC will power off. You'll need to turn it back on with the smart plug or Wake-on-LAN.")
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
+                .confirmationDialog(
+                    "Shut down the PC?",
+                    isPresented: $showShutdownConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Shut Down PC", role: .destructive) {
+                        Task { await appState.shutdownPC() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This sends a graceful shutdown to the Windows Agent. Save your work first.")
+                }
+            } else {
+                Button {
+                    RemoteHaptics.heavy()
+                    Task { await appState.startPCControl() }
+                } label: {
+                    Label("Turn On and Start PC", systemImage: "power")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
+                .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
+            }
+
+            quickLaunchRow
+        }
+        .fullScreenCover(isPresented: $showFullScreenMirror) {
+            FullScreenScreenMirrorView(store: appState.remoteInput.screenMirror)
+        }
+        .fullScreenCover(isPresented: $showFullScreenExtend) {
+            FullScreenScreenMirrorView(store: appState.remoteInput.extendDisplay)
+        }
+    }
+
+    private var quickLaunchRow: some View {
+        HStack(spacing: DesignToken.Spacing.small) {
+            quickLaunchButton(title: "Remote", symbol: "rectangle.and.hand.point.up.left.fill", tint: DesignToken.Color.cyan) {
+                appState.selectedSection = .remote
+            }
+            quickLaunchButton(title: "Watch", symbol: "tv.and.mediabox.fill", tint: DesignToken.Color.cyan) {
+                showFullScreenMirror = true
+            }
+            quickLaunchButton(title: "Extend", symbol: "rectangle.on.rectangle", tint: Color.controlDeckTint(named: "purple")) {
+                showFullScreenExtend = true
             }
         }
+    }
+
+    private func quickLaunchButton(title: String, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            RemoteHaptics.click()
+            action()
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.xSmall)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.16), interactive: true)
     }
 
     @ViewBuilder
@@ -849,6 +1126,298 @@ private struct MockPCPowerWidget: View {
 
     private var plugAvailability: DeviceAvailability {
         appState.mockRoomControl.pcPower.plugState == .unavailable ? .unavailable : .available
+    }
+}
+
+private struct SpotifyWidgetContainer: View {
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        if definition.backend.backend == .spotify {
+            LiveSpotifyWidget(definition: definition, compact: compact)
+        } else {
+            MockSpotifyWidget(definition: definition, compact: compact)
+        }
+    }
+}
+
+private struct LiveSpotifyWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    private var store: SpotifyStore { appState.spotify }
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: store.isConnected ? .available : .unavailable)
+
+            switch store.connectionStatus {
+            case .notConnected:
+                Label("Connect your Spotify account in Settings.", systemImage: "gearshape.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .connecting:
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(DesignToken.Color.destructive)
+            case .connected:
+                if store.playback.track != nil {
+                    readyContent
+                } else {
+                    Label("Nothing playing. Start playback on any Spotify device.", systemImage: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let lastActionError = store.lastActionError {
+                Text(lastActionError).font(.caption2).foregroundStyle(DesignToken.Color.destructive)
+            }
+        }
+        .task {
+            await store.startWatching()
+            await store.loadPlaylistsIfNeeded()
+            do { try await Task.sleep(for: .seconds(86_400)) } catch { }
+            store.stopWatching()
+        }
+    }
+
+    @ViewBuilder
+    private var readyContent: some View {
+        let track = store.playback.track!
+
+        HStack(spacing: DesignToken.Spacing.medium) {
+            GlassIcon(symbol: "music.note", tint: DesignToken.Color.positive, size: 44)
+                .overlay {
+                    if let url = track.artworkURL {
+                        AsyncImage(url: url) { image in
+                            image.resizable().aspectRatio(contentMode: .fill)
+                        } placeholder: { EmptyView() }
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignToken.Radius.control))
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(track.artist) — \(track.album)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            likeButton
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(value: progress.current, total: progress.total)
+                .tint(DesignToken.Color.positive)
+            HStack {
+                Text(formatted(progress.current)).font(.caption2.monospacedDigit())
+                Spacer()
+                Text(formatted(progress.total)).font(.caption2.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        HStack(spacing: DesignToken.Spacing.large) {
+            Spacer()
+            Button {
+                Task { await store.skip(forward: false) }
+            } label: {
+                Image(systemName: "backward.fill").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                Task { await store.togglePlayback() }
+            } label: {
+                Image(systemName: store.playback.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.positive.opacity(0.22), interactive: true)
+
+            Button {
+                Task { await store.skip(forward: true) }
+            } label: {
+                Image(systemName: "forward.fill").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+
+        if !store.playlists.isEmpty {
+            addToPlaylistMenu
+        }
+    }
+
+    private var progress: (current: Double, total: Double) {
+        let track = store.playback.track!
+        return (min(Double(store.playback.progressMS) / 1000, Double(track.durationMS) / 1000), Double(track.durationMS) / 1000)
+    }
+
+    private func formatted(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var likeButton: some View {
+        Button {
+            Task { await store.toggleLike() }
+        } label: {
+            Image(systemName: store.isLikedCurrentTrack ? "heart.fill" : "heart")
+                .foregroundStyle(store.isLikedCurrentTrack ? DesignToken.Color.destructive : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.subtle, cornerRadius: 999, tint: store.isLikedCurrentTrack ? DesignToken.Color.destructive.opacity(0.16) : Color.clear)
+        .accessibilityLabel(store.isLikedCurrentTrack ? "Unlike" : "Like")
+    }
+
+    private var addToPlaylistMenu: some View {
+        Menu {
+            ForEach(store.playlists) { playlist in
+                Button {
+                    Task { await store.togglePlaylistMembership(playlistID: playlist.id) }
+                } label: {
+                    if store.playlistMembership.contains(playlist.id) {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text(playlist.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.16), interactive: true)
+    }
+}
+
+private struct MockSpotifyWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    let compact: Bool
+
+    var body: some View {
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: appState.mockRoomControl.spotify.availability)
+
+            HStack(spacing: DesignToken.Spacing.medium) {
+                GlassIcon(symbol: track.artworkSymbol, tint: DesignToken.Color.positive, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("\(track.artist) — \(track.album)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                likeButton
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView(value: progress.current, total: progress.total)
+                    .tint(DesignToken.Color.positive)
+                HStack {
+                    Text(formatted(progress.current)).font(.caption2.monospacedDigit())
+                    Spacer()
+                    Text(formatted(progress.total)).font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: DesignToken.Spacing.large) {
+                Spacer()
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: false) }
+                } label: {
+                    Image(systemName: "backward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Task { await appState.toggleSpotifyPlayback() }
+                } label: {
+                    Image(systemName: appState.mockRoomControl.spotify.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.interactive, cornerRadius: 999, tint: DesignToken.Color.positive.opacity(0.22), interactive: true)
+
+                Button {
+                    Task { await appState.skipSpotifyTrack(forward: true) }
+                } label: {
+                    Image(systemName: "forward.fill").frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+
+            addToPlaylistMenu
+        }
+    }
+
+    private var track: MockSpotifyTrack { appState.mockRoomControl.spotify.currentTrack }
+
+    private var progress: (current: Double, total: Double) {
+        (min(appState.mockRoomControl.spotify.progressSeconds, track.durationSeconds), track.durationSeconds)
+    }
+
+    private func formatted(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var isLiked: Bool {
+        appState.mockRoomControl.spotify.isLiked(track.id)
+    }
+
+    private var likeButton: some View {
+        Button {
+            Task { await appState.toggleSpotifyLike() }
+        } label: {
+            Image(systemName: isLiked ? "heart.fill" : "heart")
+                .foregroundStyle(isLiked ? DesignToken.Color.destructive : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.subtle, cornerRadius: 999, tint: isLiked ? DesignToken.Color.destructive.opacity(0.16) : Color.clear)
+        .accessibilityLabel(isLiked ? "Unlike" : "Like")
+    }
+
+    private var addToPlaylistMenu: some View {
+        Menu {
+            ForEach(appState.mockRoomControl.spotify.playlists) { playlist in
+                Button {
+                    Task { await appState.toggleCurrentSpotifyTrack(inPlaylistID: playlist.id) }
+                } label: {
+                    if playlist.trackIDs.contains(track.id) {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text(playlist.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.16), interactive: true)
     }
 }
 
@@ -942,17 +1511,42 @@ private struct LiveDiscordWidget: View {
             if store.voice.isConnected {
                 HStack(spacing: -6) {
                     ForEach(store.voice.participants.prefix(4)) { participant in
-                        Text(String(participant.username.prefix(2)).uppercased())
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .frame(width: 20, height: 20)
-                            .background(Color.controlDeckTint(named: definition.tintName), in: Circle())
-                            .overlay(Circle().strokeBorder(DesignToken.Color.card, lineWidth: 1.5))
+                        participantAvatar(for: participant)
                     }
                 }
             }
         }
     }
+
+    @ViewBuilder
+    private func participantAvatar(for participant: DiscordVoiceParticipant) -> some View {
+        let initials = Text(String(participant.username.prefix(2)).uppercased())
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(Color.controlDeckTint(named: definition.tintName), in: Circle())
+
+        Group {
+            if let avatarURL = participant.avatarURL {
+                AsyncImage(url: avatarURL) { phase in
+                    if let image = phase.image {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        initials
+                    }
+                }
+                .frame(width: 20, height: 20)
+                .clipShape(Circle())
+            } else {
+                initials
+            }
+        }
+        .overlay(Circle().strokeBorder(DesignToken.Color.card, lineWidth: 1.5))
+    }
+
+    /// Menu and Button size their default labels differently even with identical padding,
+    /// so every button in this row pins this height explicitly instead of relying on padding.
+    private let controlButtonHeight: CGFloat = 56
 
     private func controlButton(title: String, symbol: String, isActive: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -960,8 +1554,7 @@ private struct LiveDiscordWidget: View {
                 Image(systemName: symbol)
                 Text(title).font(.caption2.weight(.semibold))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, DesignToken.Spacing.small)
+            .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? DesignToken.Color.destructive : .primary)
@@ -985,8 +1578,7 @@ private struct LiveDiscordWidget: View {
                 Image(systemName: "rectangle.inset.filled.badge.record")
                 Text("Share").font(.caption2.weight(.semibold))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, DesignToken.Spacing.small)
+            .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
         }
         .buttonStyle(.plain)
         .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.14), interactive: true)
@@ -1004,13 +1596,20 @@ private struct LiveDiscordWidget: View {
                     Image(systemName: "phone.down.fill")
                     Text("Leave").font(.caption2.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
             }
             .buttonStyle(.plain)
             .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
         } else {
             Menu {
+                if let lastChannel = store.lastChannel {
+                    Button {
+                        Task { await store.join(channelID: lastChannel.channelID) }
+                    } label: {
+                        Label("Rejoin \(lastChannel.channelName)", systemImage: "arrow.uturn.backward")
+                    }
+                    Divider()
+                }
                 if store.guilds.isEmpty {
                     Text("No servers loaded yet")
                 }
@@ -1032,8 +1631,7 @@ private struct LiveDiscordWidget: View {
                     Image(systemName: "phone.fill")
                     Text("Join").font(.caption2.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, DesignToken.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: controlButtonHeight)
             }
             .buttonStyle(.plain)
             .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.positive.opacity(0.18), interactive: true)
@@ -1205,6 +1803,7 @@ private struct LiveGoXLRWidget: View {
     let definition: RoomWidgetDefinition
     let compact: Bool
     @State private var showingMixer = false
+    @State private var showingMappings = false
 
     var body: some View {
         DashboardCard {
@@ -1214,31 +1813,27 @@ private struct LiveGoXLRWidget: View {
             )
 
             if snapshot?.goXLRConnected == true {
-                if definition.size.presentationDensity == .expanded {
-                    Label(
-                        meterStore.meterStreamIsStale ? "Live meters stale" : meterStore.meterConnectionState.title,
-                        systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
-                    )
-                    .font(.caption2)
-                    .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
+                if definition.size.presentationDensity != .compact {
+                    HStack(spacing: DesignToken.Spacing.small) {
+                        Label(
+                            meterStore.meterStreamIsStale ? "Meters need attention" : "Live meters",
+                            systemImage: meterStore.meterStreamIsStale ? "waveform.slash" : "waveform.path.ecg"
+                        )
+                        .foregroundStyle(meterStore.meterStreamIsStale ? .secondary : DesignToken.Color.positive)
+                        Spacer()
+                        Button("Map Meters", systemImage: "point.3.connected.trianglepath.dotted") {
+                            RemoteHaptics.heavy()
+                            showingMappings = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .font(.caption2.weight(.semibold))
                 }
                 if definition.size.presentationDensity == .compact {
                     compactMeters
                 } else {
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: DesignToken.Spacing.small) {
-                            ForEach(visibleChannels) { channel in
-                                LiveGoXLRChannelRow(
-                                    store: meterStore,
-                                    channel: channel,
-                                    tint: Color.controlDeckTint(named: definition.tintName),
-                                    showsDecibels: definition.size.presentationDensity == .expanded
-                                )
-                                .frame(width: compact ? 155 : 190)
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
+                    faderBank
                 }
             } else {
                 Label(
@@ -1255,6 +1850,7 @@ private struct LiveGoXLRWidget: View {
         .contentShape(Rectangle())
         .onTapGesture { if definition.size.presentationDensity == .compact { showingMixer = true } }
         .sheet(isPresented: $showingMixer) { GoXLRMixerView(store: meterStore) }
+        .sheet(isPresented: $showingMappings) { GoXLREndpointMappingView(store: meterStore) }
         .task {
             await appState.remoteInput.refreshAgentSecurityState()
             await meterStore.startMetering()
@@ -1270,12 +1866,42 @@ private struct LiveGoXLRWidget: View {
     private var meterStore: GoXLRStore { appState.remoteInput.goXLR }
 
     private var visibleChannels: [GoXLRChannelState] {
-        let limit = switch definition.size.presentationDensity {
-        case .compact: min(4, meterStore.channels.count)
-        case .standard: min(6, meterStore.channels.count)
-        case .expanded: meterStore.channels.count
+        let selectedIDs = definition.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+        let selected = GoXLRChannelSelectionResolver.resolve(
+            selectedIDs: selectedIDs,
+            from: meterStore.channels
+        )
+        return definition.size.presentationDensity == .compact ? Array(selected.prefix(4)) : selected
+    }
+
+    @ViewBuilder
+    private var faderBank: some View {
+        if visibleChannels.count <= 4 {
+            HStack(spacing: DesignToken.Spacing.small) {
+                ForEach(visibleChannels) { channel in
+                    LiveGoXLRVerticalFader(
+                        store: meterStore,
+                        channel: channel,
+                        tint: Color.controlDeckTint(named: definition.tintName)
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        } else {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannels) { channel in
+                        LiveGoXLRVerticalFader(
+                            store: meterStore,
+                            channel: channel,
+                            tint: Color.controlDeckTint(named: definition.tintName)
+                        )
+                        .frame(width: compact ? 66 : 78)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
         }
-        return Array(meterStore.channels.prefix(limit))
     }
 
     private var compactMeters: some View {
@@ -1283,12 +1909,12 @@ private struct LiveGoXLRWidget: View {
             ForEach(visibleChannels) { channel in
                 VStack(spacing: 3) {
                     AudioLevelMeterView(
-                        level: channel.displayLevel,
-                        peakHold: channel.peakHold,
+                        level: channel.volumeScaledDisplayLevel,
+                        peakHold: channel.volumeScaledPeakHold,
                         isClipping: channel.isClipping,
                         isAvailable: channel.isAvailable,
                         isStale: meterStore.meterStreamIsStale,
-                        decibels: channel.decibels,
+                        decibels: channel.volumeScaledDecibels,
                         channelName: channel.displayName
                     )
                     .frame(width: 18, height: 52)
@@ -1306,69 +1932,151 @@ private struct LiveGoXLRWidget: View {
     }
 }
 
-private struct LiveGoXLRChannelRow: View {
+private struct LiveGoXLRVerticalFader: View {
     let store: GoXLRStore
     let channel: GoXLRChannelState
     let tint: Color
-    let showsDecibels: Bool
     @State private var draftLevel: Double
+    @State private var isInteracting = false
 
-    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color, showsDecibels: Bool) {
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
+    init(store: GoXLRStore, channel: GoXLRChannelState, tint: Color) {
         self.store = store
         self.channel = channel
         self.tint = tint
-        self.showsDecibels = showsDecibels
         _draftLevel = State(initialValue: channel.volume)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
-            HStack(alignment: .center) {
+        VStack(spacing: 5) {
+            Text(channel.displayName)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            HStack(spacing: 6) {
                 AudioLevelMeterView(
-                    level: channel.displayLevel,
-                    peakHold: channel.peakHold,
+                    level: channel.volumeScaledDisplayLevel,
+                    peakHold: channel.volumeScaledPeakHold,
                     isClipping: channel.isClipping,
                     isAvailable: channel.isAvailable,
                     isStale: store.meterStreamIsStale,
-                    decibels: channel.decibels,
+                    decibels: channel.volumeScaledDecibels,
                     channelName: channel.displayName
                 )
-                .frame(width: 16, height: 54)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(channel.displayName)
-                        .font(.subheadline.weight(.semibold))
-                    Text(draftLevel, format: .percent.precision(.fractionLength(0)))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    if showsDecibels {
-                        Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                .frame(width: isPad ? 12 : 10, height: isPad ? 116 : 92)
+
+                GoXLRVerticalSlider(
+                    value: Binding(
+                        get: { draftLevel },
+                        set: {
+                            draftLevel = $0
+                            store.updateVolumeDraft(channelId: channel.id, value: $0)
+                        }
+                    ),
+                    tint: tint,
+                    onEditingChanged: { editing in
+                        isInteracting = editing
+                        if editing { store.beginVolumeInteraction(channelId: channel.id) }
+                    },
+                    commit: {
+                        Task { await store.commitVolumeInteraction(channelId: channel.id, value: draftLevel) }
                     }
-                }
-                Spacer()
-                Button {
-                    Task { await store.toggleMute(channelId: channel.id) }
-                } label: {
-                    Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
-                }
-                .buttonStyle(.plain)
-                .disabled(!store.controlsAreAvailable)
+                )
+                .frame(width: isPad ? 32 : 28, height: isPad ? 122 : 96)
+                .disabled(!store.controlsAreAvailable || store.channel(for: channel.id) == nil)
             }
-            Slider(value: $draftLevel, in: 0...1) { editing in
-                if !editing {
-                    store.updateVolumeDraft(channelId: channel.id, value: draftLevel)
-                    Task { await store.setVolume(channelId: channel.id, value: draftLevel) }
-                }
+
+            Button {
+                RemoteHaptics.heavy()
+                Task { await store.toggleMute(channelId: channel.id) }
+            } label: {
+                Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : .secondary)
+                    .frame(height: 32)
+                    .frame(maxWidth: .infinity)
+                    .glassSurface(
+                        .interactive,
+                        cornerRadius: 8,
+                        tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.18) : tint.opacity(0.1),
+                        interactive: true
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .tint(tint)
-            .disabled(!store.controlsAreAvailable)
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .disabled(!store.controlsAreAvailable || store.channel(for: channel.id) == nil)
+            .accessibilityLabel("\(channel.displayName) \(channel.isMuted ? "muted" : "not muted")")
+            .accessibilityHint("Double tap to toggle mute")
         }
-        .padding(DesignToken.Spacing.small)
-        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: tint.opacity(0.08))
         .onChange(of: channel.volume) { _, level in
-            draftLevel = level
+            if !isInteracting { draftLevel = level }
+        }
+    }
+}
+
+private struct GoXLRVerticalSlider: View {
+    @Binding var value: Double
+    let tint: Color
+    let onEditingChanged: (Bool) -> Void
+    let commit: () -> Void
+    @State private var isDragging = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let knobHeight = 12.0
+            let travel = max(1, geometry.size.height - knobHeight)
+            let normalizedValue = min(max(value.isFinite ? value : 0, 0), 1)
+            let y = (1 - normalizedValue) * travel
+
+            ZStack(alignment: .top) {
+                Capsule()
+                    .fill(.black.opacity(0.28))
+                    .frame(width: 5)
+                    .frame(maxHeight: .infinity)
+                Capsule()
+                    .fill(tint.opacity(0.55))
+                    .frame(width: 5, height: max(3, normalizedValue * travel))
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.92))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.25), lineWidth: 1))
+                    .shadow(color: tint.opacity(0.35), radius: 4)
+                    .frame(width: 24, height: knobHeight)
+                    .offset(y: y)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        if !isDragging {
+                            isDragging = true
+                            onEditingChanged(true)
+                        }
+                        value = min(max(1.0 - Double(gesture.location.y / geometry.size.height), 0), 1)
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        onEditingChanged(false)
+                        commit()
+                    }
+            )
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Volume")
+        .accessibilityValue(Text(value, format: .percent.precision(.fractionLength(0))))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(1, value + 0.05)
+            case .decrement: value = max(0, value - 0.05)
+            @unknown default: return
+            }
+            onEditingChanged(true)
+            onEditingChanged(false)
+            commit()
         }
     }
 }
@@ -1378,6 +2086,8 @@ private struct MockGoXLRWidget: View {
     let definition: RoomWidgetDefinition
     let compact: Bool
 
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
     var body: some View {
         DashboardCard {
             WidgetHeader(
@@ -1385,51 +2095,93 @@ private struct MockGoXLRWidget: View {
                 availability: appState.mockRoomControl.goXLR.isConnected ? .available : .unavailable
             )
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: compact ? 130 : 180), spacing: DesignToken.Spacing.medium)]) {
-                ForEach(visibleChannelIndices, id: \.self) { index in
-                    mixerChannel(index: index)
+            if definition.size.presentationDensity == .compact {
+                HStack(alignment: .bottom, spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannelIndices.prefix(4), id: \.self) { index in
+                        VStack(spacing: 3) {
+                            mockMeter(index: index).frame(width: 18, height: 52)
+                            Text(String(appState.mockRoomControl.goXLR.channels[index].name.prefix(4)))
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
+            } else if visibleChannelIndices.count <= 4 {
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(visibleChannelIndices, id: \.self) { index in
+                        mixerChannel(index: index).frame(maxWidth: .infinity)
+                    }
+                }
+            } else {
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: DesignToken.Spacing.small) {
+                        ForEach(visibleChannelIndices, id: \.self) { index in
+                            mixerChannel(index: index).frame(width: compact ? 66 : 78)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
             }
         }
     }
 
     private var visibleChannelIndices: [Int] {
-        let limit = switch definition.size.presentationDensity {
-        case .compact: 1
-        case .standard: 2
-        case .expanded: appState.mockRoomControl.goXLR.channels.count
+        let selectedIDs = definition.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+        return selectedIDs.compactMap { selectedID in
+            appState.mockRoomControl.goXLR.channels.firstIndex {
+                $0.id.caseInsensitiveCompare(selectedID) == .orderedSame
+            }
         }
-        return Array(appState.mockRoomControl.goXLR.channels.indices.prefix(limit))
     }
 
     private func mixerChannel(index: Int) -> some View {
-        VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
-            HStack {
-                Text(appState.mockRoomControl.goXLR.channels[index].name)
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button {
-                    appState.mockRoomControl.goXLR.channels[index].isMuted.toggle()
-                    Task { await appState.confirmMockControl("GoXLR mute") }
-                } label: {
-                    Image(systemName: appState.mockRoomControl.goXLR.channels[index].isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundStyle(appState.mockRoomControl.goXLR.channels[index].isMuted ? DesignToken.Color.destructive : DesignToken.Color.positive)
+        let channel = appState.mockRoomControl.goXLR.channels[index]
+        return VStack(spacing: 5) {
+            Text(channel.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 6) {
+                mockMeter(index: index).frame(width: isPad ? 12 : 10, height: isPad ? 116 : 92)
+                GoXLRVerticalSlider(
+                    value: Binding(
+                        get: { appState.mockRoomControl.goXLR.channels[index].level },
+                        set: { appState.mockRoomControl.goXLR.channels[index].level = $0 }
+                    ),
+                    tint: Color.controlDeckTint(named: definition.tintName),
+                    onEditingChanged: { _ in }
+                ) {
+                    Task { await appState.confirmMockControl("GoXLR channel level") }
                 }
-                .buttonStyle(.plain)
+                .frame(width: isPad ? 32 : 28, height: isPad ? 122 : 96)
             }
-            Slider(
-                value: Binding(
-                    get: { appState.mockRoomControl.goXLR.channels[index].level },
-                    set: { appState.mockRoomControl.goXLR.channels[index].level = $0 }
-                ),
-                in: 0...1
-            ) { editing in
-                if !editing { Task { await appState.confirmMockControl("GoXLR channel level") } }
+            Button {
+                RemoteHaptics.heavy()
+                appState.mockRoomControl.goXLR.channels[index].isMuted.toggle()
+                Task { await appState.confirmMockControl("GoXLR mute") }
+            } label: {
+                Image(systemName: channel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(channel.isMuted ? DesignToken.Color.destructive : .secondary)
+                    .frame(maxWidth: .infinity, minHeight: 28)
             }
-            .tint(Color.controlDeckTint(named: definition.tintName))
+            .buttonStyle(.plain)
+            .glassSurface(.subtle, cornerRadius: 8, tint: channel.isMuted ? DesignToken.Color.destructive.opacity(0.12) : Color.clear)
         }
-        .padding(DesignToken.Spacing.small)
-        .glassSurface(.subtle, cornerRadius: DesignToken.Radius.control, tint: Color.controlDeckTint(named: definition.tintName).opacity(0.08))
+    }
+
+    private func mockMeter(index: Int) -> some View {
+        let channel = appState.mockRoomControl.goXLR.channels[index]
+        return AudioLevelMeterView(
+            level: channel.level * 0.82,
+            peakHold: channel.level * 0.9,
+            isClipping: false,
+            isAvailable: appState.mockRoomControl.goXLR.isConnected,
+            isStale: false,
+            decibels: -60 + (channel.level * 60),
+            channelName: channel.name
+        )
     }
 }
 

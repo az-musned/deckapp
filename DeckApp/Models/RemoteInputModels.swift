@@ -60,20 +60,25 @@ enum RemoteConnectionState: Codable, Sendable, Equatable {
     }
 }
 
+/// The PC remote's extra panel, shown below the always-visible touchpad and media row.
 enum RemoteControlMode: String, CaseIterable, Identifiable, Codable, Sendable {
-    case touchpad
     case keyboard
-    case media
+    case agent
     case shortcuts
 
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .keyboard: "Keyboard"
+        case .agent: "Agent"
+        case .shortcuts: "Shortcuts"
+        }
+    }
 
     var symbol: String {
         switch self {
-        case .touchpad: "rectangle.and.hand.point.up.left.fill"
         case .keyboard: "keyboard.fill"
-        case .media: "playpause.fill"
+        case .agent: "cpu.fill"
         case .shortcuts: "command"
         }
     }

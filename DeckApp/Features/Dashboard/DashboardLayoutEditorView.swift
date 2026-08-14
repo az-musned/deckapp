@@ -240,11 +240,34 @@ private struct WidgetConfigurationView: View {
                                appState.goveeDevice(for: widget.backend.identifier) == nil {
                                 Text("Govee · Unavailable device").tag("govee:\(widget.backend.identifier)")
                             }
+                            ForEach(appState.goveeGroups) { group in
+                                Text("Govee Group · \(group.name)").tag("goveegroup:\(group.id.uuidString)")
+                            }
+                            if widget.backend.backend == .goveeGroup,
+                               appState.goveeGroup(for: widget.backend.identifier) == nil {
+                                Text("Govee Group · Unavailable group").tag("goveegroup:\(widget.backend.identifier)")
+                            }
                         }
                     } header: {
                         Text("Device Mapping")
                     } footer: {
                         Text("Govee widgets automatically use only the controls reported by the selected device. Choose a larger widget size to show more controls.")
+                    }
+                } else if widget.kind == .television {
+                    Section {
+                        Picker("Source", selection: televisionSourceBinding) {
+                            Text("Mock TV").tag("mock")
+                            ForEach(appState.lgTV.devices) { device in
+                                Text("LG webOS · \(device.name)").tag("lg:\(device.id.uuidString)")
+                            }
+                        }
+                        if appState.lgTV.devices.isEmpty {
+                            Text("Add and pair a TV in Settings first.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Device Mapping")
+                    } footer: {
+                        Text("LG webOS widgets connect directly over your local network. Pairing keys stay in Keychain.")
                     }
                 } else if widget.kind == .audioMixer {
                     Section {
@@ -256,6 +279,19 @@ private struct WidgetConfigurationView: View {
                         Text("Device Mapping")
                     } footer: {
                         Text("The live source uses the paired HTTPS Windows Agent. GoXLR Utility must already be running on the PC; DeckApp never starts it or switches device managers.")
+                    }
+
+                    Section {
+                        ForEach(audioMixerChannelOptions) { channel in
+                            Toggle(channel.name, isOn: audioMixerChannelBinding(channel.id))
+                        }
+                        Button("Use Default Four", systemImage: "arrow.counterclockwise") {
+                            widget.audioMixerChannelIDs = RoomWidgetDefinition.defaultGoXLRChannelIDs
+                        }
+                    } header: {
+                        Text("Visible Faders")
+                    } footer: {
+                        Text("Mic, Chat, Music, and System are shown by default. Select more channels to add faders; extra faders scroll horizontally inside the widget.")
                     }
                 } else {
                     Section {
@@ -295,6 +331,11 @@ private struct WidgetConfigurationView: View {
                     .disabled(widget.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+            .task {
+                if widget.kind == .audioMixer, widget.backend.backend == .windowsAgent {
+                    await appState.remoteInput.goXLR.refreshChannels()
+                }
+            }
         }
     }
 
@@ -318,6 +359,7 @@ private struct WidgetConfigurationView: View {
         Binding {
             switch widget.backend.backend {
             case .govee: "govee:\(widget.backend.identifier)"
+            case .goveeGroup: "goveegroup:\(widget.backend.identifier)"
             case .homeAssistant: "ha:\(widget.backend.identifier)"
             default: "mock"
             }
@@ -337,6 +379,13 @@ private struct WidgetConfigurationView: View {
                 widget.subtitle = "Govee · \(device.deviceName)"
                 widget.capabilities = device.actionableCapabilities.map(\.descriptor)
                 if widget.title == "Room Lights" { widget.title = device.deviceName }
+            } else if selection.hasPrefix("goveegroup:") {
+                let identifier = String(selection.dropFirst(11))
+                guard let group = appState.goveeGroup(for: identifier) else { return }
+                widget.backend = WidgetBackendReference(backend: .goveeGroup, identifier: group.id.uuidString)
+                widget.subtitle = "Govee Group · \(group.name)"
+                widget.capabilities = appState.goveeGroupCapabilities(group).map(\.descriptor)
+                if widget.title == "Room Lights" { widget.title = group.name }
             }
         }
     }
@@ -355,6 +404,69 @@ private struct WidgetConfigurationView: View {
             }
         }
     }
+
+    private var televisionSourceBinding: Binding<String> {
+        Binding {
+            widget.backend.backend == .lgWebOS ? "lg:\(widget.backend.identifier)" : "mock"
+        } set: { selection in
+            if selection == "mock" {
+                widget.backend = WidgetBackendReference(backend: .mock, identifier: "mock.media_player.lg_tv")
+                widget.subtitle = "Mock webOS television"
+            } else if selection.hasPrefix("lg:"),
+                      let id = UUID(uuidString: String(selection.dropFirst(3))),
+                      let device = appState.lgTV.devices.first(where: { $0.id == id }) {
+                widget.backend = WidgetBackendReference(backend: .lgWebOS, identifier: device.id.uuidString)
+                widget.subtitle = "Direct LG webOS · \(device.name)"
+                widget.capabilities = MockCapabilities.television
+                if widget.title == "LG TV" { widget.title = device.name }
+            }
+        }
+    }
+
+    private var selectedAudioMixerChannelIDs: [String] {
+        widget.audioMixerChannelIDs ?? RoomWidgetDefinition.defaultGoXLRChannelIDs
+    }
+
+    private var audioMixerChannelOptions: [AudioMixerChannelOption] {
+        let discovered: [AudioMixerChannelOption]
+        if widget.backend.backend == .windowsAgent, !appState.remoteInput.goXLR.channels.isEmpty {
+            discovered = appState.remoteInput.goXLR.channels.map {
+                AudioMixerChannelOption(id: $0.id, name: $0.displayName)
+            }
+        } else {
+            discovered = appState.mockRoomControl.goXLR.channels.map {
+                AudioMixerChannelOption(id: $0.id, name: $0.name)
+            }
+        }
+
+        let missingSelections = selectedAudioMixerChannelIDs
+            .filter { selectedID in
+                !discovered.contains { $0.id.caseInsensitiveCompare(selectedID) == .orderedSame }
+            }
+            .map { AudioMixerChannelOption(id: $0, name: $0.replacingOccurrences(of: "_", with: " ").capitalized) }
+        return discovered + missingSelections
+    }
+
+    private func audioMixerChannelBinding(_ channelID: String) -> Binding<Bool> {
+        Binding {
+            selectedAudioMixerChannelIDs.contains { $0.caseInsensitiveCompare(channelID) == .orderedSame }
+        } set: { isSelected in
+            var selected = selectedAudioMixerChannelIDs
+            if isSelected {
+                if !selected.contains(where: { $0.caseInsensitiveCompare(channelID) == .orderedSame }) {
+                    selected.append(channelID)
+                }
+            } else if selected.count > 1 {
+                selected.removeAll { $0.caseInsensitiveCompare(channelID) == .orderedSame }
+            }
+            widget.audioMixerChannelIDs = selected
+        }
+    }
+}
+
+private struct AudioMixerChannelOption: Identifiable {
+    let id: String
+    let name: String
 }
 
 private extension RoomWidgetKind {
@@ -368,6 +480,7 @@ private extension RoomWidgetKind {
         case .companionActions: "Companion Actions"
         case .remoteInputLauncher: "PC Remote"
         case .screenMirror: "Screen Mirror"
+        case .spotify: "Spotify"
         case .discord: "Discord"
         }
     }
@@ -377,11 +490,12 @@ private extension RoomWidgetKind {
         case .light: "Power, brightness, and supported color controls."
         case .climate: "Temperature, HVAC, fan, and swing controls."
         case .television: "Volume, source, media, and directional remote."
-        case .pcPower: "Guarded plug-on and PC boot workflow."
+        case .pcPower: "Smart plug power-on, Windows Agent shutdown, remote, and screen share."
         case .audioMixer: "Capability-driven audio channel levels and mute."
         case .companionActions: "Existing Companion actions, macros, and folders."
         case .remoteInputLauncher: "Open the authenticated PC keyboard and touchpad."
         case .screenMirror: "Mirror the PC desktop live on this iPad, same-room only."
+        case .spotify: "Now playing, playback controls, like, and add to playlist."
         case .discord: "Voice channel status, mute/deafen, join/leave, and screen share."
         }
     }
@@ -393,8 +507,11 @@ private extension WidgetBackendKind {
         case .mock: "Mock"
         case .homeAssistant: "Home Assistant"
         case .govee: "Govee"
+        case .goveeGroup: "Govee Group"
         case .windowsAgent: "Windows Agent"
         case .companion: "Companion"
+        case .lgWebOS: "LG webOS"
+        case .spotify: "Spotify"
         }
     }
 }

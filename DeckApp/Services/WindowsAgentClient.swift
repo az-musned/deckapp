@@ -123,7 +123,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             requestConfiguration.waitsForConnectivity = true
             requestConfiguration.timeoutIntervalForRequest = requestTimeout
             requestConfiguration.timeoutIntervalForResource = max(requestTimeout * 2, requestTimeout)
-            requestSession = URLSession(configuration: requestConfiguration)
+            requestSession = WindowsAgentURLSessionFactory.make(configuration: requestConfiguration)
 
             let webSocketConfiguration = URLSessionConfiguration.default
             webSocketConfiguration.waitsForConnectivity = true
@@ -131,7 +131,7 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
             // A WebSocket is an ongoing resource. Keep the long default-scale
             // lifetime and use ping/pong to detect an unhealthy peer instead.
             webSocketConfiguration.timeoutIntervalForResource = 7 * 24 * 60 * 60
-            webSocketSession = URLSession(configuration: webSocketConfiguration)
+            webSocketSession = WindowsAgentURLSessionFactory.make(configuration: webSocketConfiguration)
         }
         let key = "windowsAgent.clientDeviceID"
         if let saved = defaults.string(forKey: key), !saved.isEmpty {
@@ -288,6 +288,19 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
 
     func shutdownPC() async throws {
         try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/shutdown", authenticated: true)
+    }
+
+    func shutdown() async throws {
+        try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/shutdown", authenticated: true)
+    }
+
+    func isReachable() async -> Bool {
+        do {
+            _ = try await performRequest(method: "GET", path: "/api/v1/health", body: nil, authenticated: false)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func connect() async throws -> RemoteAgentSession {

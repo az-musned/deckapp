@@ -20,18 +20,32 @@ struct AudioLevelMeterView: View, Equatable {
 
     var body: some View {
         GeometryReader { proxy in
-            let height = proxy.size.height
-            ZStack(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(.secondary.opacity(isStale ? 0.10 : 0.16))
+            ZStack {
                 if isAvailable {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(meterGradient)
-                        .frame(height: height * clampedLevel)
-                    Rectangle()
-                        .fill(isClipping ? DesignToken.Color.destructive : .primary.opacity(0.75))
-                        .frame(height: 2)
-                        .offset(y: -height * clampedPeak)
+                    Canvas { context, size in
+                        let segmentCount = 16
+                        let gap = max(1, size.height * 0.012)
+                        let segmentHeight = max(1, (size.height - gap * CGFloat(segmentCount - 1)) / CGFloat(segmentCount))
+                        for segment in 0..<segmentCount {
+                            let threshold = Double(segment + 1) / Double(segmentCount)
+                            let y = size.height - CGFloat(segment + 1) * segmentHeight - CGFloat(segment) * gap
+                            let rect = CGRect(x: 0, y: y, width: size.width, height: segmentHeight)
+                            let path = Path(roundedRect: rect, cornerRadius: min(2, segmentHeight / 2))
+                            let color = threshold <= clampedLevel
+                                ? segmentColor(at: threshold)
+                                : Color.secondary.opacity(isStale ? 0.08 : 0.14)
+                            context.fill(path, with: .color(color))
+                        }
+
+                        if clampedPeak > 0 {
+                            let peakY = max(0, size.height * (1 - clampedPeak) - 1)
+                            let peakRect = CGRect(x: 0, y: peakY, width: size.width, height: 2)
+                            context.fill(
+                                Path(roundedRect: peakRect, cornerRadius: 1),
+                                with: .color(isClipping ? DesignToken.Color.destructive : .white.opacity(0.82))
+                            )
+                        }
+                    }
                 } else {
                     Image(systemName: "exclamationmark")
                         .font(.caption2.weight(.bold))
@@ -49,17 +63,11 @@ struct AudioLevelMeterView: View, Equatable {
 
     private var clampedLevel: Double { min(max(level.isFinite ? level : 0, 0), 1) }
     private var clampedPeak: Double { min(max(peakHold.isFinite ? peakHold : 0, clampedLevel), 1) }
-    private var meterGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: DesignToken.Color.positive, location: 0),
-                .init(color: DesignToken.Color.accent, location: 0.68),
-                .init(color: .orange, location: 0.84),
-                .init(color: DesignToken.Color.destructive, location: 1)
-            ],
-            startPoint: .bottom,
-            endPoint: .top
-        )
+    private func segmentColor(at level: Double) -> Color {
+        if level >= 0.94 { return DesignToken.Color.destructive }
+        if level >= 0.82 { return .orange }
+        if level >= 0.68 { return .yellow }
+        return DesignToken.Color.positive
     }
     private var accessibleLevel: String {
         if isStale { return "Stale" }
@@ -83,6 +91,11 @@ struct GoXLRMixerView: View {
                     .foregroundStyle(store.controlsAreAvailable ? DesignToken.Color.positive : .secondary)
                     Spacer()
                     meterStatus
+                    Button("Mappings", systemImage: "point.3.connected.trianglepath.dotted") {
+                        showingMappings = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
                 .font(.caption)
                 .padding(.horizontal)
@@ -147,20 +160,25 @@ struct GoXLRMixerView: View {
                 .lineLimit(2)
                 .frame(height: 30, alignment: .top)
             AudioLevelMeterView(
-                level: channel.displayLevel,
-                peakHold: channel.peakHold,
+                level: channel.volumeScaledDisplayLevel,
+                peakHold: channel.volumeScaledPeakHold,
                 isClipping: channel.isClipping,
                 isAvailable: channel.isAvailable,
                 isStale: store.meterStreamIsStale,
-                decibels: channel.decibels,
+                decibels: channel.volumeScaledDecibels,
                 channelName: channel.displayName
             )
             .frame(width: 34, height: 180)
-            Text(channel.decibels > -120 ? "\(channel.decibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
+            Text(channel.volumeScaledDecibels > -120 ? "\(channel.volumeScaledDecibels.formatted(.number.precision(.fractionLength(1)))) dB" : "−∞ dB")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             Slider(value: volumeBinding(channel), in: 0...1) { editing in
-                if !editing { Task { await store.setVolume(channelId: channel.id, value: store.channel(for: channel.id)?.volume ?? channel.volume) } }
+                if editing {
+                    store.beginVolumeInteraction(channelId: channel.id)
+                } else {
+                    let level = store.channel(for: channel.id)?.volume ?? channel.volume
+                    Task { await store.commitVolumeInteraction(channelId: channel.id, value: level) }
+                }
             }
             .tint(DesignToken.Color.accent)
             Text(channel.volume, format: .percent.precision(.fractionLength(0)))
@@ -188,7 +206,7 @@ struct GoXLRMixerView: View {
     }
 }
 
-private struct GoXLREndpointMappingView: View {
+struct GoXLREndpointMappingView: View {
     @Environment(\.dismiss) private var dismiss
     let store: GoXLRStore
 

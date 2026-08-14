@@ -24,7 +24,7 @@ actor GoXLRAudioMeterClient: GoXLRAudioMeterServing {
             configuration.waitsForConnectivity = true
             configuration.timeoutIntervalForRequest = 12
             configuration.timeoutIntervalForResource = 7 * 24 * 60 * 60
-            self.session = URLSession(configuration: configuration)
+            self.session = WindowsAgentURLSessionFactory.make(configuration: configuration)
         }
     }
 
