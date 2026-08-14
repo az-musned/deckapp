@@ -16,13 +16,29 @@ struct FullScreenScreenMirrorView: View {
             // natively), rotate the whole stream canvas 90° instead: the user turns their
             // phone sideways to view it, the interface orientation itself never moves.
             let isPortraitSpace = proxy.size.width < proxy.size.height
-            streamContent
-                .frame(
-                    width: isPortraitSpace ? proxy.size.height : proxy.size.width,
-                    height: isPortraitSpace ? proxy.size.width : proxy.size.height
-                )
-                .rotationEffect(.degrees(isPortraitSpace ? 90 : 0))
-                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+            ZStack(alignment: .topLeading) {
+                Color.black
+
+                streamContent
+                    .frame(
+                        width: isPortraitSpace ? proxy.size.height : proxy.size.width,
+                        height: isPortraitSpace ? proxy.size.width : proxy.size.height
+                    )
+                    .rotationEffect(.degrees(isPortraitSpace ? 90 : 0))
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+
+                // Deliberately kept OUTSIDE the rotated `streamContent`: `.rotationEffect`
+                // rotates hit-testing along with the visuals, so when this button lived
+                // inside streamContent its tap target rotated 90° away from where it's
+                // actually drawn on a locked-portrait iPhone -- taps at the visible X almost
+                // never landed on it. Real screen-space overlay controls (close button,
+                // stats overlay) belong here, not inside the rotated content.
+                closeButton
+
+                if let statsText = store.statsText {
+                    statsOverlay(statsText)
+                }
+            }
         }
         .background(Color.black.ignoresSafeArea())
         .task {
@@ -38,7 +54,13 @@ struct FullScreenScreenMirrorView: View {
             Color.black
 
             if store.hasReceivedFrame, let videoTrack = store.videoTrack {
-                ScreenMirrorFrameView(videoTrack: videoTrack, contentMode: store.mode == .extend ? .scaleToFill : .scaleAspectFit)
+                // .scaleToFill stretches to exactly fill the view regardless of the source's
+                // actual aspect ratio -- fine when phone and source dimensions happen to
+                // match, but the virtual display extend mode attaches doesn't necessarily
+                // match the phone's screen aspect ratio, so it was visibly distorting the
+                // image. .scaleAspectFit preserves the real aspect ratio (letterboxed) for
+                // both modes instead.
+                ScreenMirrorFrameView(videoTrack: videoTrack, contentMode: .scaleAspectFit)
             } else {
                 statusOverlay
             }
@@ -46,30 +68,31 @@ struct FullScreenScreenMirrorView: View {
             if store.hasReceivedFrame, store.isStale || store.connectionState != .connected {
                 staleBanner
             }
+        }
+    }
 
-            // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- see
-            // ScreenMirrorPeerConnection.swift's startStatsPolling. Remove this overlay
-            // alongside that once resolved.
-            if let statsText = store.statsText {
-                VStack {
-                    Spacer()
-                    Text(statsText)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, DesignToken.Spacing.small)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
-                        .padding(.bottom, 4)
-                }
-            }
+    private var closeButton: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "xmark")
+                .frame(width: 42, height: 42)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.elevated, cornerRadius: 999)
+        .padding()
+    }
 
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .frame(width: 42, height: 42)
-            }
-            .buttonStyle(.plain)
-            .glassSurface(.elevated, cornerRadius: 999)
-            .padding()
+    // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- see
+    // ScreenMirrorPeerConnection.swift's startStatsPolling. Remove alongside that once resolved.
+    private func statsOverlay(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, DesignToken.Spacing.small)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.bottom, 4)
         }
     }
 
@@ -115,6 +138,9 @@ private struct ScreenMirrorFrameView: UIViewRepresentable {
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
         view.videoContentMode = contentMode
+        // Passive video surface -- it has nothing of its own to handle touches for, and left
+        // enabled (the UIView default) it can swallow taps meant for controls layered on top.
+        view.isUserInteractionEnabled = false
         videoTrack.add(view)
         context.coordinator.attachedTrack = videoTrack
         return view

@@ -24,6 +24,16 @@ actor ScreenMirrorClient: ScreenMirrorServing {
     private var runTask: Task<Void, Never>?
     private var generation = UUID()
     private let session: URLSession
+    // Tracks the currently-live socket/peer connection (if any) so `stop()` can tear it down
+    // synchronously. Task cancellation alone does not unblock an in-flight
+    // `URLSessionWebSocketTask.receive()` -- the `while !Task.isCancelled` loop in `negotiate()`
+    // only re-checks cancellation between messages, so a cancelled-but-still-blocked-on-receive
+    // task leaves the socket (and the Agent's server-side reservation for it) alive until
+    // something else eventually errors it out, e.g. the server's own keep-alive timeout tens of
+    // seconds later. Explicitly cancelling the socket here makes that in-flight `receive()`
+    // throw immediately, unwinding `negotiate()` to its `defer` cleanup right away.
+    private var activeSocket: URLSessionWebSocketTask?
+    private var activePeer: PeerConnectionSession?
 
     init(session: URLSession? = nil) {
         if let session {
@@ -67,8 +77,36 @@ actor ScreenMirrorClient: ScreenMirrorServing {
 
     func stop() async {
         generation = UUID()
-        runTask?.cancel()
+        let previousRunTask = runTask
         runTask = nil
+        previousRunTask?.cancel()
+        let hadActiveConnection = activePeer != nil || activeSocket != nil
+        activePeer?.close()
+        activePeer = nil
+        activeSocket?.cancel(with: .goingAway, reason: nil)
+        activeSocket = nil
+        // `cancel(with:)` issues the WebSocket close frame but doesn't wait for it to reach
+        // the Agent -- `start()` always calls `stop()` first, so without this, rapidly
+        // reopening (as in "open Extend, close it, open again" in quick succession) can send
+        // the new connection's upgrade request before the server has processed the old one's
+        // close, leaving both briefly reserved server-side. Awaiting the cancelled run task
+        // lets our own cleanup fully unwind before returning; the short delay after it gives
+        // the close frame a moment to actually land before a fresh connection attempt starts.
+        // Bounded: `cancel(with:)` *should* make a blocked `receive()` throw promptly, but
+        // this must never be allowed to hang indefinitely if it doesn't -- `start()` awaits
+        // `stop()` before doing anything else, so an unbounded wait here would deadlock the
+        // entire client on the next connection attempt.
+        if let previousRunTask {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await previousRunTask.value }
+                group.addTask { try? await Task.sleep(for: .seconds(2)) }
+                await group.next()
+                group.cancelAll()
+            }
+        }
+        if hadActiveConnection {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
     }
 
     private func run(
@@ -127,12 +165,19 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let socket = session.webSocketTask(with: request)
         socket.resume()
+        activeSocket = socket
 
         let signaling = SignalingSession(socket: socket)
         let peer = PeerConnectionSession(signaling: signaling, track: track, state: state, stats: stats)
+        activePeer = peer
         defer {
             peer.close()
             socket.cancel(with: .goingAway, reason: nil)
+            // Only clear if these are still the ones we set -- a newer negotiate() attempt
+            // (or a concurrent stop()) may have already replaced/cleared them, and this
+            // defer must not stomp on that.
+            if activeSocket === socket { activeSocket = nil }
+            if activePeer === peer { activePeer = nil }
         }
 
         let heartbeat = Task(priority: .utility) {
