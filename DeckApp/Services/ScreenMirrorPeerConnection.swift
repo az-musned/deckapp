@@ -10,8 +10,8 @@ import Foundation
 /// Single app-wide RTCPeerConnectionFactory. Per stasel/WebRTC's guidance, creating more than
 /// one is expensive and can cause codec/threading issues, so every mirror-stream connection
 /// (mirror mode, extend mode, and any reconnect) shares this instance.
-enum WebRTCEnvironment {
-    static let factory: RTCPeerConnectionFactory = {
+nonisolated enum WebRTCEnvironment {
+    nonisolated(unsafe) static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         return RTCPeerConnectionFactory(
             encoderFactory: RTCDefaultVideoEncoderFactory(),
@@ -45,7 +45,7 @@ actor SignalingSession {
 /// decide when to start negotiating. Reports the remote video track (once WebRTC's own
 /// negotiation and jitter buffer produce one) and coarse connection-state transitions back
 /// through the callbacks passed at init.
-final class PeerConnectionSession: NSObject, RTCPeerConnectionDelegate, @unchecked Sendable {
+nonisolated final class PeerConnectionSession: NSObject, RTCPeerConnectionDelegate, @unchecked Sendable {
     private let signaling: SignalingSession
     private let onTrack: @Sendable (RTCVideoTrack?) -> Void
     private let onState: @Sendable (ScreenMirrorConnectionState) -> Void
@@ -69,7 +69,7 @@ final class PeerConnectionSession: NSObject, RTCPeerConnectionDelegate, @uncheck
         configuration.sdpSemantics = .unifiedPlan
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         self.peerConnection = WebRTCEnvironment.factory.peerConnection(
-            with: configuration, constraints: constraints, delegate: nil)
+            with: configuration, constraints: constraints, delegate: nil)!
 
         super.init()
         peerConnection.delegate = self
@@ -153,6 +153,10 @@ final class PeerConnectionSession: NSObject, RTCPeerConnectionDelegate, @uncheck
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
 }
+
+/// GoogleWebRTC's RTCVideoTrack is a thread-safe ObjC ref-counted wrapper around a native
+/// track object -- safe to hand across threads/actors, just not annotated as such.
+extension RTCVideoTrack: @retroactive @unchecked Sendable {}
 
 /// Thin async/await wrappers over GoogleWebRTC's completion-handler APIs.
 extension RTCPeerConnection {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Mirrors `DiscordBridgeState` on the Windows Agent exactly (raw values are the C# enum's `.ToString()` output).
-enum DiscordBridgeState: String, Codable, Sendable {
+nonisolated enum DiscordBridgeState: String, Codable, Sendable {
     case notConfigured = "NotConfigured"
     case disconnected = "Disconnected"
     case connectingToClient = "ConnectingToClient"
@@ -21,16 +21,22 @@ enum DiscordBridgeState: String, Codable, Sendable {
     }
 }
 
-struct DiscordVoiceParticipant: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct DiscordVoiceParticipant: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let username: String
     let mute: Bool
     let deaf: Bool
     let selfMute: Bool
     let selfDeaf: Bool
+    let avatarURL: URL?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, username, mute, deaf, selfMute, selfDeaf
+        case avatarURL = "avatarUrl"
+    }
 }
 
-struct DiscordVoiceChannelState: Codable, Sendable, Equatable {
+nonisolated struct DiscordVoiceChannelState: Codable, Sendable, Equatable {
     let channelId: String?
     let channelName: String?
     let guildId: String?
@@ -45,37 +51,43 @@ struct DiscordVoiceChannelState: Codable, Sendable, Equatable {
     var isConnected: Bool { channelId != nil }
 }
 
-struct DiscordGuildSummary: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct DiscordGuildSummary: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let name: String
 }
 
-struct DiscordChannelSummary: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct DiscordChannelSummary: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let name: String
 }
 
-struct DiscordBridgeConfiguration: Sendable, Equatable {
+nonisolated struct DiscordBridgeConfiguration: Sendable, Equatable {
     let addresses: [String]
     let credential: String
 }
 
-struct DiscordStatusMessage: Decodable, Sendable {
+nonisolated struct DiscordLastChannel: Codable, Sendable, Equatable {
+    let channelID: String
+    let channelName: String
+    let guildID: String?
+}
+
+nonisolated struct DiscordStatusMessage: Decodable, Sendable {
     let bridgeState: DiscordBridgeState
     let voice: DiscordVoiceChannelState
     let error: String?
 }
 
-struct DiscordGuildListMessage: Decodable, Sendable {
+nonisolated struct DiscordGuildListMessage: Decodable, Sendable {
     let guilds: [DiscordGuildSummary]
 }
 
-struct DiscordChannelListMessage: Decodable, Sendable {
+nonisolated struct DiscordChannelListMessage: Decodable, Sendable {
     let guildId: String
     let channels: [DiscordChannelSummary]
 }
 
-enum DiscordCommand: Sendable {
+nonisolated enum DiscordCommand: Sendable {
     case mute(Bool)
     case deafen(Bool)
     case join(channelId: String)
@@ -95,7 +107,7 @@ enum DiscordCommand: Sendable {
     }
 }
 
-struct DiscordCommandBody: Encodable, Sendable {
+nonisolated struct DiscordCommandBody: Encodable, Sendable {
     let command: String
     let value: Bool?
     let channelId: String?
