@@ -1,19 +1,26 @@
 import Foundation
+@preconcurrency import WebRTC
 
 protocol ScreenMirrorServing: Sendable {
     func start(
         addresses: [String],
         credential: String,
         mode: ScreenMirrorMode,
-        frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
+        track: @escaping @Sendable (RTCVideoTrack?) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async
     func stop() async
 }
 
+/// Connects to the Agent's screen-mirror endpoint and negotiates a WebRTC connection over it.
+/// The WebSocket at /api/v1/screen/mirror/ws now only carries signaling (SDP offer/answer,
+/// trickled ICE candidates, the keyframe-request control message) -- video itself flows over
+/// the RTP/SRTP connection WebRTC negotiates, replacing the old custom 26-byte-header binary
+/// frame protocol entirely (no more per-frame decode callback: once negotiation completes,
+/// the remote `RTCVideoTrack` is handed to the caller once via `track`, and WebRTC's own
+/// decoder/jitter buffer/renderer pipeline takes it from there).
 actor ScreenMirrorClient: ScreenMirrorServing {
     private var runTask: Task<Void, Never>?
-    private var socket: URLSessionWebSocketTask?
     private var generation = UUID()
     private let session: URLSession
 
@@ -33,7 +40,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         addresses: [String],
         credential: String,
         mode: ScreenMirrorMode,
-        frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
+        track: @escaping @Sendable (RTCVideoTrack?) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async {
         await stop()
@@ -49,7 +56,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                 addresses: addresses,
                 credential: credential,
                 mode: mode,
-                frame: frame,
+                track: track,
                 state: state
             )
         }
@@ -59,8 +66,6 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         generation = UUID()
         runTask?.cancel()
         runTask = nil
-        socket?.cancel(with: .goingAway, reason: nil)
-        socket = nil
     }
 
     private func run(
@@ -68,7 +73,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         addresses: [String],
         credential: String,
         mode: ScreenMirrorMode,
-        frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
+        track: @escaping @Sendable (RTCVideoTrack?) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async {
         var attempt = 0
@@ -77,12 +82,12 @@ actor ScreenMirrorClient: ScreenMirrorServing {
             var lastError: Error = WindowsRemoteInputError.disconnected
             for address in addresses where !Task.isCancelled {
                 do {
-                    try await receiveStream(
+                    try await negotiate(
                         address: address,
                         credential: credential,
                         mode: mode,
                         generation: generation,
-                        frame: frame,
+                        track: track,
                         state: state
                     )
                 } catch {
@@ -90,6 +95,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                 }
                 guard self.generation == generation else { return }
             }
+            track(nil)
             attempt += 1
             state(.failed(lastError.localizedDescription))
             let delay = min(pow(2, Double(min(attempt - 1, 4))) * 0.5, 8)
@@ -97,12 +103,12 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         }
     }
 
-    private func receiveStream(
+    private func negotiate(
         address: String,
         credential: String,
         mode: ScreenMirrorMode,
         generation: UUID,
-        frame: @escaping @Sendable (ScreenStreamFrame) -> Void,
+        track: @escaping @Sendable (RTCVideoTrack?) -> Void,
         state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
     ) async throws {
         let endpoint = try WindowsAgentEndpoint(address)
@@ -113,69 +119,48 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         var request = URLRequest(url: socketURL)
         request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let currentSocket = session.webSocketTask(with: request)
-        socket = currentSocket
-        var sequenceTracker = ScreenStreamSequenceTracker()
-        let decoder = ScreenMirrorDecoder()
-        currentSocket.resume()
+        let socket = session.webSocketTask(with: request)
+        socket.resume()
+
+        let signaling = SignalingSession(socket: socket)
+        let peer = PeerConnectionSession(signaling: signaling, track: track, state: state)
+        defer {
+            peer.close()
+            socket.cancel(with: .goingAway, reason: nil)
+        }
 
         let heartbeat = Task(priority: .utility) {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(10))
                 guard !Task.isCancelled else { return }
-                currentSocket.sendPing { error in
-                    if error != nil { currentSocket.cancel(with: .goingAway, reason: nil) }
+                socket.sendPing { error in
+                    if error != nil { socket.cancel(with: .goingAway, reason: nil) }
                 }
             }
         }
-        defer {
-            heartbeat.cancel()
-            currentSocket.cancel(with: .goingAway, reason: nil)
-            if socket === currentSocket { socket = nil }
-        }
+        defer { heartbeat.cancel() }
 
-        var receivedFirstMessage = false
-        var announcedConnected = false
+        var receivedHello = false
         while !Task.isCancelled, self.generation == generation {
             let received: URLSessionWebSocketTask.Message
-            if receivedFirstMessage {
-                received = try await currentSocket.receive()
+            if receivedHello {
+                received = try await socket.receive()
             } else {
-                received = try await Self.receiveFirstMessage(from: currentSocket)
+                received = try await Self.receiveFirstMessage(from: socket)
             }
 
-            if !receivedFirstMessage {
-                receivedFirstMessage = true
-                guard case .string(let text) = received,
-                      let helloData = text.data(using: .utf8),
-                      (try? JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: helloData)) != nil else { continue }
-                // Ask for an immediate keyframe so the decoder doesn't sit on a black
-                // screen until the encoder's next scheduled IDR.
-                try? await currentSocket.send(.string(#"{"type":"screen.requestKeyframe"}"#))
+            guard case .string(let text) = received, let data = text.data(using: .utf8) else { continue }
+
+            if !receivedHello {
+                receivedHello = true
+                guard (try? JSONDecoder().decode(ScreenMirrorHelloMessage.self, from: data)) != nil else { continue }
+                // The phone offers; the agent just answers -- see PeerConnectionSession.
+                try await peer.beginNegotiation()
                 continue
             }
 
-            guard case .data(let data) = received,
-                  let wireFrame = ScreenStreamWireFrameParser.parse(data) else { continue }
-            let (accepted, gapDetected) = sequenceTracker.accepts(wireFrame.sequence)
-            guard accepted else { continue }
-            if gapDetected {
-                // One or more frames were dropped before this one arrived (broadcaster
-                // backpressure) -- H.264's reference chain is now broken, so ask for a
-                // keyframe to resync rather than let the decoder keep producing corrupted
-                // output against a stale reference until the next scheduled IDR.
-                try? await currentSocket.send(.string(#"{"type":"screen.requestKeyframe"}"#))
-            }
-            guard let sampleBuffer = decoder.decode(wireFrame) else { continue }
-            if !announcedConnected {
-                state(.connected)
-                announcedConnected = true
-            }
-            frame(ScreenStreamFrame(
-                sequence: wireFrame.sequence,
-                timestampMilliseconds: wireFrame.timestampMilliseconds,
-                sampleBuffer: sampleBuffer
-            ))
+            guard let signal = try? JSONDecoder().decode(ScreenStreamSignal.self, from: data) else { continue }
+            await peer.handle(signal)
         }
     }
 

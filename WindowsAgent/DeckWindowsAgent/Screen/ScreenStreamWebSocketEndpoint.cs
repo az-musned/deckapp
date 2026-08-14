@@ -1,17 +1,23 @@
-using System.Buffers.Binary;
 using System.Net.WebSockets;
 using System.Text.Json;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen.Models;
 using DeckWindowsAgent.Security;
+using SIPSorcery.Net;
+using SIPSorceryMedia.Abstractions;
 
 namespace DeckWindowsAgent.Screen;
 
+/// This endpoint used to carry raw H.264 video bytes framed in a custom binary header. It
+/// now only carries WebRTC signaling (SDP offer/answer + trickled ICE candidates) plus the
+/// pre-existing keyframe-request control message; the video itself flows over the RTP/SRTP
+/// connection SIPSorcery negotiates once signaling completes. Connection setup (auth, mode
+/// reservation, capacity) is unchanged from the old binary-frame version.
 public static class ScreenStreamWebSocketEndpoint
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private const byte FullFrameType = 1;
+    private const int H264DynamicPayloadType = 96;
 
     public static void MapScreenStreamWebSocket(this WebApplication app) =>
         app.Map("/api/v1/screen/mirror/ws", HandleAsync);
@@ -42,7 +48,7 @@ public static class ScreenStreamWebSocketEndpoint
         }
 
         ScreenStreamSubscription subscription;
-        try { subscription = broadcaster.Subscribe(); }
+        try { subscription = broadcaster.Reserve(); }
         catch (InvalidOperationException error)
         {
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -53,9 +59,29 @@ public static class ScreenStreamWebSocketEndpoint
         using (subscription)
         using (var socket = await context.WebSockets.AcceptWebSocketAsync())
         using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted))
+        using (var pc = new RTCPeerConnection(new RTCConfiguration { iceServers = [] }))
         {
+            var sendGate = new SemaphoreSlim(1, 1);
             logger.LogInformation("Authenticated screen mirror client connected in {Mode} mode.", mode);
-            var receiveTask = ReceiveControlMessagesAsync(socket, streamService, linkedCts.Token);
+
+            pc.addTrack(new MediaStreamTrack(
+                new VideoFormat(VideoCodecsEnum.H264, H264DynamicPayloadType),
+                MediaStreamStatusEnum.SendOnly));
+            subscription.Attach(pc);
+
+            pc.onicecandidate += candidate =>
+            {
+                if (candidate is null) return;
+                _ = SendSignalAsync(socket, sendGate, new ScreenStreamSignal(
+                    "ice", null, candidate.candidate, candidate.sdpMid,
+                    candidate.sdpMLineIndex), linkedCts.Token);
+            };
+            pc.onconnectionstatechange += state =>
+            {
+                if (state is RTCPeerConnectionState.closed or RTCPeerConnectionState.failed or RTCPeerConnectionState.disconnected)
+                    linkedCts.Cancel();
+            };
+
             try
             {
                 var expectedHeight = ExpectedHeight(mode, options);
@@ -67,14 +93,9 @@ public static class ScreenStreamWebSocketEndpoint
                     "h264",
                     PairingService.ProtocolVersion,
                     mode == ScreenStreamMode.Extend ? "extend" : "mirror");
-                var helloBytes = JsonSerializer.SerializeToUtf8Bytes(hello, JsonOptions);
-                await socket.SendAsync(helloBytes, WebSocketMessageType.Text, true, linkedCts.Token);
+                await SendJsonAsync(socket, sendGate, hello, linkedCts.Token);
 
-                await foreach (var frame in subscription.Reader.ReadAllAsync(linkedCts.Token))
-                {
-                    if (!safety.ScreenShareAllowed || socket.State != WebSocketState.Open) break;
-                    await SendFrameAsync(socket, frame, linkedCts.Token);
-                }
+                await ReceiveSignalingMessagesAsync(socket, sendGate, pc, streamService, linkedCts.Token);
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
@@ -82,63 +103,102 @@ public static class ScreenStreamWebSocketEndpoint
             }
             catch (WebSocketException)
             {
-                // The peer disconnected between video frames.
+                // The peer disconnected mid-negotiation.
             }
             finally
             {
                 linkedCts.Cancel();
-                try { await receiveTask; } catch (OperationCanceledException) { }
-                if (socket.State == WebSocketState.CloseReceived)
-                    await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Closed.", CancellationToken.None);
+                pc.close();
+                if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                {
+                    try { await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Closed.", CancellationToken.None); }
+                    catch (WebSocketException) { /* Already closing. */ }
+                }
                 logger.LogInformation("Screen mirror client disconnected.");
             }
         }
     }
 
-    private static async Task ReceiveControlMessagesAsync(WebSocket socket, ScreenStreamService streamService, CancellationToken cancellationToken)
+    private static async Task ReceiveSignalingMessagesAsync(
+        WebSocket socket,
+        SemaphoreSlim sendGate,
+        RTCPeerConnection pc,
+        ScreenStreamService streamService,
+        CancellationToken cancellationToken)
     {
-        var buffer = new byte[1024];
-        try
+        var buffer = new byte[16 * 1024];
+        while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
-            while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
+            using var messageStream = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
             {
-                using var messageStream = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await socket.ReceiveAsync(buffer, cancellationToken);
-                    if (result.MessageType == WebSocketMessageType.Close) return;
-                    messageStream.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
+                result = await socket.ReceiveAsync(buffer, cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                messageStream.Write(buffer, 0, result.Count);
+            } while (!result.EndOfMessage);
 
-                if (result.MessageType != WebSocketMessageType.Text || messageStream.Length == 0) continue;
-                HandleControlMessage(messageStream.ToArray(), streamService);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Connection is closing.
-        }
-        catch (WebSocketException)
-        {
-            // The peer disconnected.
+            if (result.MessageType != WebSocketMessageType.Text || messageStream.Length == 0) continue;
+            await HandleSignalingMessageAsync(socket, sendGate, pc, streamService, messageStream.ToArray(), cancellationToken);
         }
     }
 
-    private static void HandleControlMessage(byte[] payload, ScreenStreamService streamService)
+    private static async Task HandleSignalingMessageAsync(
+        WebSocket socket,
+        SemaphoreSlim sendGate,
+        RTCPeerConnection pc,
+        ScreenStreamService streamService,
+        byte[] payload,
+        CancellationToken cancellationToken)
     {
+        ScreenStreamSignal? signal;
+        try { signal = JsonSerializer.Deserialize<ScreenStreamSignal>(payload, JsonOptions); }
+        catch (JsonException) { return; }
+        if (signal is null) return;
+
+        switch (signal.Type)
+        {
+            case "screen.requestKeyframe":
+                streamService.RequestKeyframe();
+                break;
+
+            case "offer" when signal.Sdp is { } offerSdp:
+                pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.offer, sdp = offerSdp });
+                var answer = pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                await SendSignalAsync(socket, sendGate, new ScreenStreamSignal("answer", answer.sdp, null, null, null), cancellationToken);
+                break;
+
+            case "ice" when signal.Candidate is { } candidate:
+                pc.addIceCandidate(new RTCIceCandidateInit
+                {
+                    candidate = candidate,
+                    sdpMid = signal.SdpMid,
+                    sdpMLineIndex = (ushort)(signal.SdpMLineIndex ?? 0),
+                });
+                break;
+        }
+    }
+
+    private static Task SendSignalAsync(WebSocket socket, SemaphoreSlim sendGate, ScreenStreamSignal signal, CancellationToken cancellationToken) =>
+        SendJsonAsync(socket, sendGate, signal, cancellationToken);
+
+    private static async Task SendJsonAsync<T>(WebSocket socket, SemaphoreSlim sendGate, T value, CancellationToken cancellationToken)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+        await sendGate.WaitAsync(cancellationToken);
         try
         {
-            using var document = JsonDocument.Parse(payload);
-            if (document.RootElement.TryGetProperty("type", out var typeElement)
-                && typeElement.GetString() == "screen.requestKeyframe")
-            {
-                streamService.RequestKeyframe();
-            }
+            if (socket.State != WebSocketState.Open) return;
+            await socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
         }
-        catch (JsonException)
+        catch (WebSocketException)
         {
-            // Ignore malformed control messages.
+            // The peer disconnected; nothing left to do with this send.
+        }
+        finally
+        {
+            sendGate.Release();
         }
     }
 
@@ -155,23 +215,6 @@ public static class ScreenStreamWebSocketEndpoint
         if (target.Width <= 0) return 0;
         var scale = Math.Min(1.0, options.ScreenStream.MaxWidth / (double)target.Width);
         return (int)Math.Round(target.Height * scale);
-    }
-
-    private const byte KeyframeFlag = 0x01;
-
-    private static Task SendFrameAsync(WebSocket socket, ScreenFrame frame, CancellationToken cancellationToken)
-    {
-        var buffer = new byte[26 + frame.Payload.Length];
-        var span = buffer.AsSpan();
-        span[0] = FullFrameType;
-        span[1] = frame.IsKeyframe ? KeyframeFlag : (byte)0;
-        BinaryPrimitives.WriteUInt32LittleEndian(span[2..], frame.Sequence);
-        BinaryPrimitives.WriteInt64LittleEndian(span[6..], frame.TimestampMilliseconds);
-        BinaryPrimitives.WriteUInt32LittleEndian(span[14..], (uint)frame.Width);
-        BinaryPrimitives.WriteUInt32LittleEndian(span[18..], (uint)frame.Height);
-        BinaryPrimitives.WriteUInt32LittleEndian(span[22..], (uint)frame.Payload.Length);
-        frame.Payload.CopyTo(span[26..]);
-        return socket.SendAsync(buffer, WebSocketMessageType.Binary, true, cancellationToken);
     }
 
     private static bool Authenticate(HttpContext context, PairingService pairing)

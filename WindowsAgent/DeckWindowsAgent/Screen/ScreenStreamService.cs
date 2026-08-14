@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen.Models;
@@ -12,14 +13,32 @@ public sealed class ScreenStreamService(
     VirtualDisplayDriverLocator extendMonitorLocator,
     AgentSafetyState safety,
     ScreenStreamBroadcaster broadcaster,
-    ScreenStreamSequence sequence,
     ILogger<ScreenStreamService> logger) : BackgroundService
 {
     private readonly object _modeGate = new();
+
+    // Connects the capture loop to the encode loop. Capacity 1 + DropOldest: only the
+    // newest frame is ever worth encoding, and a full channel must never make the capture
+    // loop block -- that would reintroduce exactly the capture-blocked-on-encode jitter
+    // this split exists to remove. Single reader/writer since each loop owns exactly one side.
+    private readonly Channel<CapturedFrame> _captureChannel = Channel.CreateBounded<CapturedFrame>(
+        new BoundedChannelOptions(1)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = true,
+        });
+
+    private static readonly TimeSpan KeyframeInterval = TimeSpan.FromSeconds(2);
+
     private ScreenStreamMode? _activeMode;
     private IScreenCaptureSource? _source;
     private H264Encoder? _encoder;
+    private DateTime _encoderCreatedAtUtc;
     private int _lastSubscriberCount;
+
+    /// RTP timestamps for video advance on a fixed 90kHz clock regardless of codec.
+    private uint RtpDurationUnits => (uint)(90_000 / Math.Max(1, options.ScreenStream.TargetFps));
 
     /// Called by the WebSocket endpoint before subscribing a new client. Locks in the
     /// stream's active mode while any subscriber is connected; rejects a connection
@@ -77,7 +96,13 @@ public sealed class ScreenStreamService(
         NativeMethods.TimeBeginPeriod(1);
         try
         {
-            await RunCaptureLoopAsync(stoppingToken);
+            // Capture and encode run as independent loops joined only by _captureChannel:
+            // a slow encode (scene complexity, system load) must never delay the next
+            // capture tick, or the same jitter this split exists to remove just reappears
+            // one layer downstream of the fixed-rate pacing loop below.
+            await Task.WhenAll(
+                RunCaptureLoopAsync(stoppingToken),
+                RunEncodeLoopAsync(stoppingToken));
         }
         finally
         {
@@ -98,27 +123,14 @@ public sealed class ScreenStreamService(
                 if (subscriberCount > _lastSubscriberCount) RequestKeyframe();
                 _lastSubscriberCount = subscriberCount;
 
-                var (source, encoder) = EnsureCapture();
-                if (source is { IsAvailable: true } && encoder is not null)
+                var source = EnsureCaptureSource();
+                if (source is { IsAvailable: true })
                 {
                     try
                     {
                         if (source.TryCaptureFrame(out var captured))
                         {
-                            var encoded = encoder.Encode(captured);
-                            if (encoded is { } result)
-                            {
-                                var frame = new ScreenFrame(
-                                    sequence.Next(),
-                                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                                    Math.Min(captured.Width, options.ScreenStream.MaxWidth),
-                                    captured.Width > options.ScreenStream.MaxWidth
-                                        ? (int)Math.Round(captured.Height * (options.ScreenStream.MaxWidth / (double)captured.Width))
-                                        : captured.Height,
-                                    result.IsKeyframe,
-                                    result.AnnexB);
-                                broadcaster.Publish(frame);
-                            }
+                            _captureChannel.Writer.TryWrite(captured);
                         }
                     }
                     catch (Exception error) when (IsRecoverableCaptureFailure(error))
@@ -133,18 +145,47 @@ public sealed class ScreenStreamService(
                 lock (_modeGate) TearDownCaptureLocked();
             }
 
-            // Fixed-rate scheduling, not sleep-after-work: capture+encode time varies frame to
-            // frame (scene complexity, system load, the resize step when downscaling), so
-            // sleeping a constant interval after variable-length work produces a variable
-            // total period between frames -- i.e. jitter baked in before the client ever sees
-            // a byte, which client-side display-timing fixes can't undo. Target a fixed
-            // wall-clock tick instead: subtract the work just done from the interval, clamped
-            // at zero if a frame overran its budget (no negative delay, no busy-loop catch-up).
+            // Fixed-rate scheduling, not sleep-after-work: capture time varies frame to
+            // frame (system load, driver hiccups), so sleeping a constant interval after
+            // variable-length work produces a variable total period between frames -- i.e.
+            // jitter baked in before the client ever sees a byte, which client-side
+            // display-timing fixes can't undo. Target a fixed wall-clock tick instead:
+            // subtract the work just done from the interval, clamped at zero if a frame
+            // overran its budget (no negative delay, no busy-loop catch-up).
             var targetInterval = active
                 ? TimeSpan.FromSeconds(1d / options.ScreenStream.TargetFps)
                 : TimeSpan.FromMilliseconds(500);
             var remaining = targetInterval - tickStopwatch.Elapsed;
             if (remaining > TimeSpan.Zero) await Task.Delay(remaining, stoppingToken);
+        }
+    }
+
+    private async Task RunEncodeLoopAsync(CancellationToken stoppingToken)
+    {
+        await foreach (var captured in _captureChannel.Reader.ReadAllAsync(stoppingToken))
+        {
+            H264Encoder? encoder;
+            lock (_modeGate)
+            {
+                if (_activeMode is null) continue;
+                encoder = EnsureEncoderLocked(captured.Width, captured.Height);
+            }
+            if (encoder is null) continue;
+
+            try
+            {
+                var encoded = encoder.Encode(captured);
+                if (encoded is { } result) broadcaster.Publish(result, RtpDurationUnits);
+            }
+            catch (Exception error) when (IsRecoverableCaptureFailure(error))
+            {
+                logger.LogWarning("The H.264 encoder failed on a frame; the Agent will retry: {Message}", error.Message);
+                lock (_modeGate)
+                {
+                    _encoder?.Dispose();
+                    _encoder = null;
+                }
+            }
         }
     }
 
@@ -154,47 +195,59 @@ public sealed class ScreenStreamService(
         await base.StopAsync(cancellationToken);
     }
 
-    private (IScreenCaptureSource? Source, H264Encoder? Encoder) EnsureCapture()
+    private IScreenCaptureSource? EnsureCaptureSource()
     {
         lock (_modeGate)
         {
-            if (_activeMode is not { } mode) return (null, null);
+            if (_activeMode is not { } mode) return null;
+            if (_source is not null) return _source;
 
-            if (_source is null)
+            var deviceName = mode == ScreenStreamMode.Mirror
+                ? options.ScreenStream.MirrorMonitorDeviceName
+                : options.ScreenStream.ExtendMonitorDeviceName ?? extendMonitorLocator.TryResolveDeviceName();
+            try
             {
-                var deviceName = mode == ScreenStreamMode.Mirror
-                    ? options.ScreenStream.MirrorMonitorDeviceName
-                    : options.ScreenStream.ExtendMonitorDeviceName ?? extendMonitorLocator.TryResolveDeviceName();
-                try
-                {
-                    _source = sourceFactory.Create(deviceName);
-                }
-                catch (Exception error) when (IsRecoverableCaptureFailure(error))
-                {
-                    logger.LogWarning("Failed to start screen capture for {Mode} mode: {Message}", mode, error.Message);
-                    return (null, null);
-                }
+                _source = sourceFactory.Create(deviceName);
+                return _source;
             }
-
-            if (_encoder is null && _source is { IsAvailable: true } source)
+            catch (Exception error) when (IsRecoverableCaptureFailure(error))
             {
-                try
-                {
-                    // Probe a frame to learn the real capture dimensions before sizing the encoder.
-                    if (!source.TryCaptureFrame(out var probe)) return (_source, null);
-                    var scale = Math.Min(1.0, options.ScreenStream.MaxWidth / (double)probe.Width);
-                    var width = EvenDimension((int)Math.Round(probe.Width * scale));
-                    var height = EvenDimension((int)Math.Round(probe.Height * scale));
-                    _encoder = new H264Encoder(width, height, options.ScreenStream.TargetFps, options.ScreenStream.BitrateKbps * 1000);
-                }
-                catch (Exception error) when (IsRecoverableCaptureFailure(error))
-                {
-                    logger.LogWarning("Failed to start the H.264 encoder: {Message}", error.Message);
-                    return (_source, null);
-                }
+                logger.LogWarning("Failed to start screen capture for {Mode} mode: {Message}", mode, error.Message);
+                return null;
             }
+        }
+    }
 
-            return (_source, _encoder);
+    /// Must be called while holding _modeGate. Sizes the encoder off the dimensions of
+    /// whichever captured frame the encode loop is about to encode -- the first frame that
+    /// flows through the channel doubles as the sizing probe, so there's no separate
+    /// probe-then-discard capture the way there was before capture/encode were split.
+    private H264Encoder? EnsureEncoderLocked(int capturedWidth, int capturedHeight)
+    {
+        if (_encoder is not null)
+        {
+            // Safety net for keyframe delivery: SIPSorcery's RTCP PLI (loss-triggered
+            // keyframe request) isn't reliably raised by every client/network path, so
+            // recovery can't depend on it alone. Force a fresh IDR periodically regardless
+            // of whether one was explicitly requested.
+            if (DateTime.UtcNow - _encoderCreatedAtUtc < KeyframeInterval) return _encoder;
+            _encoder.Dispose();
+            _encoder = null;
+        }
+
+        try
+        {
+            var scale = Math.Min(1.0, options.ScreenStream.MaxWidth / (double)capturedWidth);
+            var width = EvenDimension((int)Math.Round(capturedWidth * scale));
+            var height = EvenDimension((int)Math.Round(capturedHeight * scale));
+            _encoder = new H264Encoder(width, height, options.ScreenStream.TargetFps, options.ScreenStream.BitrateKbps * 1000);
+            _encoderCreatedAtUtc = DateTime.UtcNow;
+            return _encoder;
+        }
+        catch (Exception error) when (IsRecoverableCaptureFailure(error))
+        {
+            logger.LogWarning("Failed to start the H.264 encoder: {Message}", error.Message);
+            return null;
         }
     }
 

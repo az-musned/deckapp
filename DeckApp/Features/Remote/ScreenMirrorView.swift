@@ -1,6 +1,6 @@
-import AVFoundation
 import SwiftUI
 import UIKit
+@preconcurrency import WebRTC
 
 struct FullScreenScreenMirrorView: View {
     @Environment(\.dismiss) private var dismiss
@@ -10,8 +10,8 @@ struct FullScreenScreenMirrorView: View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
 
-            if store.hasReceivedFrame {
-                ScreenMirrorFrameView(displayLayer: store.displayLayer, videoGravity: store.mode == .extend ? .resize : .resizeAspect)
+            if store.hasReceivedFrame, let videoTrack = store.videoTrack {
+                ScreenMirrorFrameView(videoTrack: videoTrack, contentMode: store.mode == .extend ? .scaleToFill : .scaleAspectFit)
                     .ignoresSafeArea()
             } else {
                 statusOverlay
@@ -60,39 +60,39 @@ struct FullScreenScreenMirrorView: View {
     }
 }
 
-/// Hosts `ScreenMirrorStore.displayLayer` (the same instance the store enqueues decoded
-/// frames onto) as a sublayer, keeping its frame in sync via `layoutSubviews`. Frames are
-/// enqueued on the store's layer instance directly -- creating a fresh layer here (e.g. via
-/// a `layerClass` override) would enqueue onto a layer nothing ever displays.
-private final class ScreenMirrorHostView: UIView {
-    private let displayLayer: AVSampleBufferDisplayLayer
-
-    init(displayLayer: AVSampleBufferDisplayLayer) {
-        self.displayLayer = displayLayer
-        super.init(frame: .zero)
-        backgroundColor = .black
-        displayLayer.removeFromSuperlayer()
-        layer.addSublayer(displayLayer)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not implemented") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        displayLayer.frame = bounds
-    }
-}
-
+/// Hosts an `RTCMTLVideoView` bound to the negotiated remote video track -- WebRTC's own
+/// Metal-backed renderer, replacing the old `AVSampleBufferDisplayLayer` sublayer host now
+/// that decoding and jitter buffering happen inside the WebRTC stack rather than via
+/// per-frame `CMSampleBuffer`s the app assembled itself. A `Coordinator` tracks which track
+/// is currently attached so `updateUIView`/`dismantleUIView` can detach cleanly if the track
+/// changes or the view goes away (`videoTrack.add`/`.remove` isn't reference-counted).
 private struct ScreenMirrorFrameView: UIViewRepresentable {
-    let displayLayer: AVSampleBufferDisplayLayer
-    let videoGravity: AVLayerVideoGravity
+    let videoTrack: RTCVideoTrack
+    let contentMode: UIView.ContentMode
 
-    func makeUIView(context: Context) -> ScreenMirrorHostView {
-        ScreenMirrorHostView(displayLayer: displayLayer)
+    final class Coordinator {
+        var attachedTrack: RTCVideoTrack?
     }
 
-    func updateUIView(_ uiView: ScreenMirrorHostView, context: Context) {
-        displayLayer.videoGravity = videoGravity
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> RTCMTLVideoView {
+        let view = RTCMTLVideoView()
+        view.videoContentMode = contentMode
+        videoTrack.add(view)
+        context.coordinator.attachedTrack = videoTrack
+        return view
+    }
+
+    func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
+        uiView.videoContentMode = contentMode
+        guard context.coordinator.attachedTrack !== videoTrack else { return }
+        context.coordinator.attachedTrack?.remove(uiView)
+        videoTrack.add(uiView)
+        context.coordinator.attachedTrack = videoTrack
+    }
+
+    static func dismantleUIView(_ uiView: RTCMTLVideoView, coordinator: Coordinator) {
+        coordinator.attachedTrack?.remove(uiView)
     }
 }

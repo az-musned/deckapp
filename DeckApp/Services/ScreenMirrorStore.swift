@@ -1,15 +1,20 @@
-import AVFoundation
-import CoreMedia
 import Foundation
 import Observation
+@preconcurrency import WebRTC
 
 @MainActor
 @Observable
 final class ScreenMirrorStore {
-    let displayLayer = AVSampleBufferDisplayLayer()
+    private(set) var videoTrack: RTCVideoTrack?
     private(set) var hasReceivedFrame = false
     private(set) var connectionState: ScreenMirrorConnectionState = .disconnected
-    private(set) var isStale = true
+
+    /// WebRTC hands the app a track once, not a callback per decoded frame, so there's no
+    /// per-frame timestamp left to poll for staleness the way the old wire protocol had.
+    /// Connection health is exactly what RTCPeerConnectionDelegate's ICE state already
+    /// reports (see PeerConnectionSession), so derive staleness from connectionState instead
+    /// of a separate polling task.
+    var isStale: Bool { hasReceivedFrame && connectionState != .connected }
 
     let mode: ScreenMirrorMode
 
@@ -17,26 +22,10 @@ final class ScreenMirrorStore {
     @ObservationIgnored private let client: any ScreenMirrorServing
     @ObservationIgnored private var consumers = 0
     @ObservationIgnored private var appIsActive = true
-    @ObservationIgnored private var staleTask: Task<Void, Never>?
-    @ObservationIgnored private var lastFrameDate: Date?
 
     init(mode: ScreenMirrorMode, client: any ScreenMirrorServing = ScreenMirrorClient()) {
         self.mode = mode
         self.client = client
-        Self.configureRealtimeTimebase(for: displayLayer)
-    }
-
-    /// Frames are stamped with the host clock at decode time (see ScreenMirrorDecoder), not a
-    /// timestamp from the PC. AVSampleBufferDisplayLayer schedules display against its own
-    /// controlTimebase, which defaults to something unrelated to that clock -- without this,
-    /// display timing was effectively arbitrary, showing up as frames appearing out of order.
-    private static func configureRealtimeTimebase(for layer: AVSampleBufferDisplayLayer) {
-        var timebase: CMTimebase?
-        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
-        guard let timebase else { return }
-        CMTimebaseSetTime(timebase, time: CMClockGetTime(CMClockGetHostTimeClock()))
-        CMTimebaseSetRate(timebase, rate: 1.0)
-        layer.controlTimebase = timebase
     }
 
     func attach(controller: RemoteInputController) { self.controller = controller }
@@ -78,52 +67,29 @@ final class ScreenMirrorStore {
             connectionState = .failed("Pair and configure the Windows Agent first.")
             return
         }
-        staleTask?.cancel()
-        lastFrameDate = nil
-        isStale = true
         await client.start(
             addresses: configuration.addresses,
             credential: configuration.credential,
             mode: mode,
-            frame: { [weak self] frame in
-                Task { @MainActor in self?.apply(frame) }
+            track: { [weak self] track in
+                Task { @MainActor in self?.apply(track) }
             },
             state: { [weak self] state in
                 Task { @MainActor in self?.connectionState = state }
             }
         )
-        staleTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                self?.updateStaleness(now: .now)
-            }
-        }
     }
 
     private func stopTransport() async {
-        staleTask?.cancel()
-        staleTask = nil
         await client.stop()
         connectionState = .disconnected
-        isStale = true
         hasReceivedFrame = false
-        displayLayer.flush()
+        videoTrack = nil
     }
 
-    private func apply(_ frame: ScreenStreamFrame) {
-        lastFrameDate = Date()
-        isStale = false
-        hasReceivedFrame = true
-        if displayLayer.status == .failed {
-            displayLayer.flush()
-        }
-        displayLayer.enqueue(frame.sampleBuffer)
-    }
-
-    private func updateStaleness(now: Date) {
-        guard let lastFrameDate else { return }
-        isStale = now.timeIntervalSince(lastFrameDate) >= 2
+    private func apply(_ track: RTCVideoTrack?) {
+        videoTrack = track
+        if track != nil { hasReceivedFrame = true }
     }
 }
 
