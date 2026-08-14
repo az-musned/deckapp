@@ -28,7 +28,7 @@ nonisolated enum ScreenMirrorConnectionState: Equatable, Sendable {
         case .connecting: "Connecting"
         case .connected: "Live"
         case .reconnecting: "Reconnecting"
-        case .failed: "Unavailable"
+        case .failed(let message): message
         }
     }
 }

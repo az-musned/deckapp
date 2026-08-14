@@ -7,7 +7,8 @@ protocol ScreenMirrorServing: Sendable {
         credential: String,
         mode: ScreenMirrorMode,
         track: @escaping @Sendable (RTCVideoTrack?) -> Void,
-        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
+        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void,
+        stats: @escaping @Sendable (String) -> Void
     ) async
     func stop() async
 }
@@ -41,7 +42,8 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         credential: String,
         mode: ScreenMirrorMode,
         track: @escaping @Sendable (RTCVideoTrack?) -> Void,
-        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
+        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void,
+        stats: @escaping @Sendable (String) -> Void
     ) async {
         await stop()
         guard !addresses.isEmpty, !credential.isEmpty else {
@@ -57,7 +59,8 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                 credential: credential,
                 mode: mode,
                 track: track,
-                state: state
+                state: state,
+                stats: stats
             )
         }
     }
@@ -74,7 +77,8 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         credential: String,
         mode: ScreenMirrorMode,
         track: @escaping @Sendable (RTCVideoTrack?) -> Void,
-        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
+        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void,
+        stats: @escaping @Sendable (String) -> Void
     ) async {
         var attempt = 0
         while !Task.isCancelled, self.generation == generation {
@@ -88,7 +92,8 @@ actor ScreenMirrorClient: ScreenMirrorServing {
                         mode: mode,
                         generation: generation,
                         track: track,
-                        state: state
+                        state: state,
+                        stats: stats
                     )
                 } catch {
                     lastError = error
@@ -109,7 +114,8 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         mode: ScreenMirrorMode,
         generation: UUID,
         track: @escaping @Sendable (RTCVideoTrack?) -> Void,
-        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void
+        state: @escaping @Sendable (ScreenMirrorConnectionState) -> Void,
+        stats: @escaping @Sendable (String) -> Void
     ) async throws {
         let endpoint = try WindowsAgentEndpoint(address)
         let baseURL = try endpoint.url(path: "/api/v1/screen/mirror/ws", webSocket: true)
@@ -123,7 +129,7 @@ actor ScreenMirrorClient: ScreenMirrorServing {
         socket.resume()
 
         let signaling = SignalingSession(socket: socket)
-        let peer = PeerConnectionSession(signaling: signaling, track: track, state: state)
+        let peer = PeerConnectionSession(signaling: signaling, track: track, state: state, stats: stats)
         defer {
             peer.close()
             socket.cancel(with: .goingAway, reason: nil)

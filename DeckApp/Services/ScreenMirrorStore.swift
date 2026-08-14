@@ -8,6 +8,9 @@ final class ScreenMirrorStore {
     private(set) var videoTrack: RTCVideoTrack?
     private(set) var hasReceivedFrame = false
     private(set) var connectionState: ScreenMirrorConnectionState = .disconnected
+    // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- see
+    // ScreenMirrorPeerConnection.swift's startStatsPolling. Remove alongside that once resolved.
+    private(set) var statsText: String?
 
     /// WebRTC hands the app a track once, not a callback per decoded frame, so there's no
     /// per-frame timestamp left to poll for staleness the way the old wire protocol had.
@@ -67,6 +70,7 @@ final class ScreenMirrorStore {
             connectionState = .failed("Pair and configure the Windows Agent first.")
             return
         }
+        Self.resetStatsLog()
         await client.start(
             addresses: configuration.addresses,
             credential: configuration.credential,
@@ -76,6 +80,12 @@ final class ScreenMirrorStore {
             },
             state: { [weak self] state in
                 Task { @MainActor in self?.connectionState = state }
+            },
+            stats: { [weak self] text in
+                Task { @MainActor in
+                    self?.statsText = text
+                    Self.appendStatsLog(text)
+                }
             }
         )
     }
@@ -85,11 +95,36 @@ final class ScreenMirrorStore {
         connectionState = .disconnected
         hasReceivedFrame = false
         videoTrack = nil
+        statsText = nil
     }
 
     private func apply(_ track: RTCVideoTrack?) {
         videoTrack = track
         if track != nil { hasReceivedFrame = true }
+    }
+
+    // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- writes each stats
+    // line to Documents/screen-mirror-stats.log (pulled off-device via
+    // `xcrun devicectl device copy from --domain-type appDataContainer`) so the numbers can
+    // be read without someone reading the on-screen overlay aloud. Remove alongside the rest
+    // of this diagnostic instrumentation once resolved.
+    nonisolated private static func resetStatsLog() {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        try? FileManager.default.removeItem(at: documents.appendingPathComponent("screen-mirror-stats.log"))
+    }
+
+    nonisolated private static func appendStatsLog(_ text: String) {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let url = documents.appendingPathComponent("screen-mirror-stats.log")
+        let line = "\(Date().timeIntervalSince1970) \(text)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            handle.write(data)
+        } else {
+            try? data.write(to: url)
+        }
     }
 }
 

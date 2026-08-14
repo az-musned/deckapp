@@ -47,6 +47,22 @@ struct FullScreenScreenMirrorView: View {
                 staleBanner
             }
 
+            // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- see
+            // ScreenMirrorPeerConnection.swift's startStatsPolling. Remove this overlay
+            // alongside that once resolved.
+            if let statsText = store.statsText {
+                VStack {
+                    Spacer()
+                    Text(statsText)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, DesignToken.Spacing.small)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+                        .padding(.bottom, 4)
+                }
+            }
+
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
                     .frame(width: 42, height: 42)
