@@ -54,6 +54,7 @@ struct CompanionButtonMapping: Sendable, Equatable, Hashable, Codable {
 enum CompanionDashboardAction: String, CaseIterable, Sendable, Hashable, Identifiable, Codable {
     case launchGame
     case sleepPC
+    case shutdownPC
 
     var id: String { rawValue }
 
@@ -61,6 +62,7 @@ enum CompanionDashboardAction: String, CaseIterable, Sendable, Hashable, Identif
         switch self {
         case .launchGame: "Launch Game"
         case .sleepPC: "Sleep PC"
+        case .shutdownPC: "Shut Down PC"
         }
     }
 
@@ -68,6 +70,7 @@ enum CompanionDashboardAction: String, CaseIterable, Sendable, Hashable, Identif
         switch self {
         case .launchGame: .launchGame
         case .sleepPC: .sleepPC
+        case .shutdownPC: .shutdownPC
         }
     }
 
@@ -75,6 +78,7 @@ enum CompanionDashboardAction: String, CaseIterable, Sendable, Hashable, Identif
         switch self {
         case .launchGame: "gamecontroller.fill"
         case .sleepPC: "powersleep"
+        case .shutdownPC: "power"
         }
     }
 }

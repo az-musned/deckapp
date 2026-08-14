@@ -6,15 +6,19 @@ struct ControlDeckValidation {
         let launchMapping = CompanionButtonMapping(page: 2, row: 1, column: 3)
         var items = ControlDeckItem.initialItems(
             launchMapping: launchMapping,
-            sleepMapping: nil
+            sleepMapping: nil,
+            shutdownMapping: nil
         )
 
-        precondition(items.count == 4)
+        precondition(items.count == 5)
         precondition(items[2].mapping == launchMapping)
         precondition(items[3].mapping == nil)
         precondition(items[2].action == .companion(launchMapping))
         precondition(items[3].action == nil)
         precondition(items[3].requiresConfirmation)
+        precondition(items[4].mapping == nil)
+        precondition(items[4].action == nil)
+        precondition(items[4].requiresConfirmation)
 
         var folder = ControlDeckItem.folder(title: "Games")
         folder.children.append(.companionButton(title: "Launch Game", mapping: launchMapping))

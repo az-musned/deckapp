@@ -174,6 +174,21 @@ actor FailoverWindowsAgentService: WindowsRemoteInputServing {
         throw lastError
     }
 
+    func shutdownPC() async throws {
+        var lastError: Error = WindowsRemoteInputError.disconnected
+        for index in preferredIndices {
+            do {
+                try await clients[index].shutdownPC()
+                activeIndex = index
+                return
+            } catch {
+                lastError = error
+                if !Self.canFailOver(after: error) { throw error }
+            }
+        }
+        throw lastError
+    }
+
     private var preferredIndices: [Int] {
         let all = Array(clients.indices)
         guard let activeIndex, all.contains(activeIndex) else { return all }

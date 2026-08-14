@@ -186,6 +186,19 @@ final class RemoteInputController {
         }
     }
 
+    /// Sends a shutdown request straight to the paired Windows Agent. Returns whether the
+    /// agent accepted it; callers surface failure inline rather than throwing.
+    @discardableResult
+    func shutdownPC() async -> Bool {
+        guard pairingState.isPaired else { return false }
+        do {
+            try await service.shutdownPC()
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func refreshAgentSecurityState() async {
         let credential = try? pairingKeychain.load(account: pairingCredentialAccount)
         await service.restoreCredential(credential ?? nil)

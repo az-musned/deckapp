@@ -286,6 +286,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/hotkey", body: body, authenticated: true)
     }
 
+    func shutdownPC() async throws {
+        try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/shutdown", authenticated: true)
+    }
+
     func connect() async throws -> RemoteAgentSession {
         lastDisconnectReason = nil
         let security = try await fetchSecurityState()

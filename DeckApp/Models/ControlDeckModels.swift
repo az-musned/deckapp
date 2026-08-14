@@ -145,7 +145,8 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
 
     static func initialItems(
         launchMapping: CompanionButtonMapping?,
-        sleepMapping: CompanionButtonMapping?
+        sleepMapping: CompanionButtonMapping?,
+        shutdownMapping: CompanionButtonMapping?
     ) -> [ControlDeckItem] {
         var launch = companionButton(
             title: "Launch Game",
@@ -170,11 +171,24 @@ struct ControlDeckItem: Identifiable, Codable, Sendable, Equatable {
         sleep.subtitle = sleepMapping == nil ? "Not mapped" : "Put PC to sleep"
         sleep.requiresConfirmation = true
 
+        var shutdown = companionButton(
+            title: "Shut Down PC",
+            symbol: "power",
+            tintName: "red",
+            mapping: shutdownMapping ?? CompanionButtonMapping()
+        )
+        shutdown.mapping = shutdownMapping
+        shutdown.action = shutdownMapping.map(ControlDeckAction.companion)
+        shutdown.systemAction = .shutdownPC
+        shutdown.subtitle = shutdownMapping == nil ? "Not mapped" : "Turn off the PC"
+        shutdown.requiresConfirmation = true
+
         return [
             widget(.microphoneWidget),
             widget(.volumeWidget),
             launch,
-            sleep
+            sleep,
+            shutdown
         ]
     }
 }

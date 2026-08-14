@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using DeckWindowsAgent.Audio;
 using DeckWindowsAgent.Capabilities;
@@ -48,7 +49,6 @@ builder.Services.AddHostedService(services => services.GetRequiredService<AudioM
 builder.Services.AddSingleton<IScreenCaptureSourceFactory, WindowsGraphicsCaptureSourceFactory>();
 builder.Services.AddSingleton<VirtualDisplayDriverLocator>();
 builder.Services.AddSingleton<ScreenStreamBroadcaster>();
-builder.Services.AddSingleton<ScreenStreamSequence>();
 builder.Services.AddSingleton<ScreenStreamService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ScreenStreamService>());
 builder.Services.AddHostedService<LocalSafetyConsoleService>();
@@ -158,6 +158,24 @@ app.MapPost("/api/v1/agent/hotkey", async (HttpContext context, HotkeyRequest re
     catch (InputInjectionException error)
     {
         return Results.Json(new { error = error.Message }, statusCode: StatusCodes.Status409Conflict);
+    }
+});
+
+app.MapPost("/api/v1/agent/power/shutdown", (HttpContext context, PairingService pairing) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    try
+    {
+        Process.Start(new ProcessStartInfo("shutdown", "/s /t 5 /c \"Requested from DeckApp\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        return Results.Accepted();
+    }
+    catch (Exception error)
+    {
+        return Results.Json(new { error = error.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
 });
 

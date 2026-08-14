@@ -110,6 +110,12 @@ struct SettingsView: View {
                                     Text(appState.friendlyName(for: entity)).tag(entity.entityID)
                                 }
                             }
+                            Picker("Shut Down PC Script", selection: shutdownPCScriptBinding) {
+                                Text("Use Companion mapping").tag("")
+                                ForEach(appState.homeAssistantScriptEntities) { entity in
+                                    Text(appState.friendlyName(for: entity)).tag(entity.entityID)
+                                }
+                            }
                         }
                         Text("Each mapped widget uses capabilities and live state reported by Home Assistant. Unmapped widgets stay in mock mode.")
                             .font(.caption)
@@ -276,12 +282,20 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    LabeledContent("Shut Down PC") {
+                        Text(mappingDescription(for: .shutdownPC))
+                            .foregroundStyle(.secondary)
+                    }
+
                     Menu {
                         Button("Launch Game") {
                             appState.assignTestedCompanionButton(to: .launchGame)
                         }
                         Button("Sleep PC") {
                             appState.assignTestedCompanionButton(to: .sleepPC)
+                        }
+                        Button("Shut Down PC") {
+                            appState.assignTestedCompanionButton(to: .shutdownPC)
                         }
                     } label: {
                         Label("Assign Tested Button", systemImage: "link")
@@ -411,6 +425,10 @@ struct SettingsView: View {
 
     private var sleepPCScriptBinding: Binding<String> {
         Binding(get: { appState.homeAssistantSleepPCScriptEntityID }, set: { appState.mapPCScriptEntity($0, for: .sleepPC) })
+    }
+
+    private var shutdownPCScriptBinding: Binding<String> {
+        Binding(get: { appState.homeAssistantShutdownPCScriptEntityID }, set: { appState.mapPCScriptEntity($0, for: .shutdownPC) })
     }
 
     private var pcQueueTimeoutBinding: Binding<Double> {

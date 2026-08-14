@@ -776,6 +776,7 @@ private struct DirectionalRemoteControl: View {
 private struct MockPCPowerWidget: View {
     @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
+    @State private var showShutdownConfirmation = false
 
     var body: some View {
         DashboardCard {
@@ -810,9 +811,25 @@ private struct MockPCPowerWidget: View {
             .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.warning.opacity(0.2), interactive: true)
             .disabled(appState.mockRoomControl.pcPower.pcState != .offline)
 
-            Label("Power-off is intentionally unavailable", systemImage: "lock.shield.fill")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Button {
+                showShutdownConfirmation = true
+            } label: {
+                Label("Shut Down PC", systemImage: "power")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignToken.Spacing.small)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.2), interactive: true)
+            .disabled(appState.mockRoomControl.pcPower.pcState == .offline)
+            .confirmationDialog("Shut down the PC?", isPresented: $showShutdownConfirmation, titleVisibility: .visible) {
+                Button("Shut Down PC", role: .destructive) {
+                    Task { await appState.shutdownPC() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The PC will power off. You'll need to turn it back on with the smart plug or Wake-on-LAN.")
+            }
         }
     }
 

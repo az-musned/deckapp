@@ -37,6 +37,7 @@ final class AppState {
     var homeAssistantPCOnlineSensorEntityID: String
     var homeAssistantLaunchGameScriptEntityID: String
     var homeAssistantSleepPCScriptEntityID: String
+    var homeAssistantShutdownPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
@@ -89,6 +90,7 @@ final class AppState {
         homeAssistantPCOnlineSensorEntityID = UserDefaults.standard.string(forKey: "homeAssistant.pcOnlineSensorEntityID") ?? ""
         homeAssistantLaunchGameScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.launchGameScriptEntityID") ?? ""
         homeAssistantSleepPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.sleepPCScriptEntityID") ?? ""
+        homeAssistantShutdownPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.shutdownPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
@@ -103,7 +105,8 @@ final class AppState {
         companionDashboardMappings = savedDashboardMappings
         controlDeckItems = companionSettings.loadControlDeckItems() ?? ControlDeckItem.initialItems(
             launchMapping: savedDashboardMappings[.launchGame],
-            sleepMapping: savedDashboardMappings[.sleepPC]
+            sleepMapping: savedDashboardMappings[.sleepPC],
+            shutdownMapping: savedDashboardMappings[.shutdownPC]
         )
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-showRemote") {
@@ -283,7 +286,8 @@ final class AppState {
         )
         let mappedCount = [homeAssistantLightEntityID, homeAssistantClimateEntityID, homeAssistantTelevisionEntityID,
                            homeAssistantTelevisionRemoteEntityID, homeAssistantPCPowerEntityID, homeAssistantPCOnlineSensorEntityID,
-                           homeAssistantLaunchGameScriptEntityID, homeAssistantSleepPCScriptEntityID].filter { !$0.isEmpty }.count
+                           homeAssistantLaunchGameScriptEntityID, homeAssistantSleepPCScriptEntityID,
+                           homeAssistantShutdownPCScriptEntityID].filter { !$0.isEmpty }.count
         let mappings = IntegrationHealthItem(id: "mappings", title: "Entity Mappings", status: "\(mappedCount) mapped", detail: "Identifiers hidden from diagnostics", level: mappedCount > 0 ? .healthy : .informational, symbol: "link.circle.fill")
         let pc = IntegrationHealthItem(
             id: "pc", title: "PC State", status: homeAssistantPCOnlineSensorEntityID.isEmpty ? "No sensor" : (mockRoomControl.pcPower.backendReachable ? "Online" : "Offline"),
@@ -366,6 +370,9 @@ final class AppState {
         case .sleepPC:
             homeAssistantSleepPCScriptEntityID = entityID
             UserDefaults.standard.set(entityID, forKey: "homeAssistant.sleepPCScriptEntityID")
+        case .shutdownPC:
+            homeAssistantShutdownPCScriptEntityID = entityID
+            UserDefaults.standard.set(entityID, forKey: "homeAssistant.shutdownPCScriptEntityID")
         }
     }
 
@@ -741,6 +748,7 @@ final class AppState {
         switch action {
         case .launchGame: homeAssistantLaunchGameScriptEntityID
         case .sleepPC: homeAssistantSleepPCScriptEntityID
+        case .shutdownPC: homeAssistantShutdownPCScriptEntityID
         }
     }
 
@@ -771,15 +779,15 @@ final class AppState {
                     if script.state == "on" { observedRunning = true }
                     let lifecycleChanged = observedRunning || script.lastChanged != previousLastChanged
                     if lifecycleChanged, script.state == "off" {
-                        if action == .sleepPC, !homeAssistantPCOnlineSensorEntityID.isEmpty {
-                            execution.backendMessage = "Sleep script completed. Waiting for PC offline confirmation…"
+                        if action == .sleepPC || action == .shutdownPC, !homeAssistantPCOnlineSensorEntityID.isEmpty {
+                            execution.backendMessage = "\(action.title) script completed. Waiting for PC offline confirmation…"
                             pendingCommand = execution
                             if await waitForPCOnlineState(false, until: deadline) {
                                 execution.status = .confirmed
                                 execution.backendMessage = "PC offline confirmed by Home Assistant."
                             } else {
                                 execution.status = .failed
-                                execution.backendMessage = "Sleep script finished, but the PC did not go offline before timeout."
+                                execution.backendMessage = "\(action.title) script finished, but the PC did not go offline before timeout."
                             }
                         } else {
                             execution.status = .confirmed
@@ -1321,6 +1329,21 @@ final class AppState {
         }
     }
 
+    func shutdownPC() async {
+        guard !remoteInput.usesMockAgent, remoteInput.pairingState.isPaired else {
+            await performCompanionDashboardAction(.shutdownPC)
+            return
+        }
+        var execution = CommandExecution(action: .shutdownPC, status: .running, backendMessage: "Sending shutdown to the Windows Agent…")
+        pendingCommand = execution
+        let accepted = await remoteInput.shutdownPC()
+        execution.status = accepted ? .confirmed : .failed
+        execution.backendMessage = accepted
+            ? "Windows Agent accepted the shutdown request."
+            : "The Windows Agent rejected the shutdown request."
+        pendingCommand = execution
+    }
+
     func performCompanionDashboardAction(_ action: CompanionDashboardAction) async {
         var execution = CommandExecution(action: action.roomAction, status: .queued)
         pendingCommand = execution
@@ -1474,10 +1497,15 @@ final class AppState {
         let fallbackAction: CompanionDashboardAction? = switch item.title.lowercased() {
         case "launch game": .launchGame
         case "sleep pc": .sleepPC
+        case "shut down pc": .shutdownPC
         default: nil
         }
         let semanticAction = item.systemAction ?? fallbackAction
         if let semanticAction {
+            if semanticAction == .shutdownPC, !remoteInput.usesMockAgent, remoteInput.pairingState.isPaired {
+                await shutdownPC()
+                return
+            }
             let scriptID = homeAssistantScriptID(for: semanticAction)
             if !scriptID.isEmpty {
                 await runHomeAssistantPCScript(semanticAction, entityID: scriptID)

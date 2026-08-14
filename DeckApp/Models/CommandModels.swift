@@ -10,6 +10,7 @@ nonisolated enum RoomAction: Sendable, Equatable {
     case toggleMicrophone
     case launchGame
     case sleepPC
+    case shutdownPC
     case companionButton(String)
     case mockControl(String)
 }
