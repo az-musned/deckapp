@@ -32,6 +32,7 @@ struct RootView: View {
                 await appState.remoteInput.extendDisplay.setAppActive(phase == .active)
                 appState.lgTV.setAppActive(phase == .active)
                 if phase == .active { await appState.connectCompanionIfConfigured() }
+                if phase == .active { await appState.remoteInput.autoConnectIfNeeded() }
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
                 if phase != .active { await appState.greeClimate.deactivate() }
             }
