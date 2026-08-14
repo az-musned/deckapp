@@ -27,11 +27,19 @@
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
+/* Begin PBXBuildFile section */
+		A10000000000000000000012 /* WebRTC in Frameworks */ = {
+			isa = PBXBuildFile;
+			productRef = A10000000000000000000011 /* WebRTC */;
+		};
+/* End PBXBuildFile section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		A10000000000000000000002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000012 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -73,6 +81,7 @@
 			);
 			name = DeckApp;
 			packageProductDependencies = (
+				A10000000000000000000011 /* WebRTC */,
 			);
 			productName = DeckApp;
 			productType = "com.apple.product-type.application";
@@ -101,6 +110,9 @@
 			);
 			mainGroup = A10000000000000000000003;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A10000000000000000000013 /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000004 /* Products */;
 			projectDirPath = "";
@@ -259,6 +271,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000000000000000000013 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 151.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000011 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000013 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A1000000000000000000000A /* Project object */;
 }
