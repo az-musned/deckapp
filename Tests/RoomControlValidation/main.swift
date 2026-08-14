@@ -33,6 +33,8 @@ struct RoomControlValidation {
         precondition(template.widgets.count == 8)
         precondition(template.widgets.map(\.kind) == [.light, .climate, .television, .pcPower, .audioMixer, .spotify, .discord, .companionActions])
         precondition(template.widgets.last?.backend.backend == .companion)
+        precondition(template.widgets.first { $0.kind == .pcPower }?.capabilities.contains { $0.id == "watch_screen" } == true)
+        precondition(template.widgets.first { $0.kind == .pcPower }?.capabilities.contains { $0.id == "extend_display" } == true)
 
         let climate = template.widgets.first { $0.kind == .climate }!
         precondition(climate.capabilities.contains { $0.kind == .temperature })
