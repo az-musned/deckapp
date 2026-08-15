@@ -204,7 +204,18 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
                         vtable[CreateForMonitorVtableSlot];
                     IntPtr itemPointer;
                     var hr = createForMonitor(interopPointer, monitorHandle, &itemGuid, &itemPointer);
-                    Marshal.ThrowExceptionForHR(hr);
+                    // Marshal.ThrowExceptionForHR maps HRESULTs to whatever CLR exception type
+                    // happens to correspond (E_INVALIDARG -> ArgumentException, E_ACCESSDENIED ->
+                    // UnauthorizedAccessException, ...), none of which IsRecoverableCaptureFailure
+                    // recognizes -- observed in practice as E_INVALIDARG (0x80070057) for a
+                    // freshly-attached virtual display's HMONITOR, presumably because DXGI/WGC's
+                    // output enumeration hadn't caught up with EnumDisplayMonitors' view yet. An
+                    // uncaught ArgumentException here crashes the whole BackgroundService and, per
+                    // HostOptions.BackgroundServiceExceptionBehavior's StopHost default, the entire
+                    // Agent process. Throwing COMException explicitly instead -- already in
+                    // IsRecoverableCaptureFailure's allow-list -- makes any CreateForMonitor failure
+                    // a recoverable one that just retries on the next capture tick instead.
+                    if (hr < 0) throw new COMException("IGraphicsCaptureItemInterop.CreateForMonitor failed.", hr);
                     return GraphicsCaptureItem.FromAbi(itemPointer) is GraphicsCaptureItem item
                         ? item
                         : throw new InvalidOperationException("Failed to create a GraphicsCaptureItem for the target monitor.");

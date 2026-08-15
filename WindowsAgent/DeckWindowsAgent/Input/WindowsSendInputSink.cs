@@ -6,7 +6,7 @@ using DeckWindowsAgent.Screen;
 
 namespace DeckWindowsAgent.Input;
 
-public sealed class WindowsSendInputSink(AgentOptions options) : IWindowsInputSink
+public sealed class WindowsSendInputSink(AgentOptions options, ILogger<WindowsSendInputSink> logger) : IWindowsInputSink
 {
     private const uint InputMouse = 0;
     private const uint InputKeyboard = 1;
@@ -217,9 +217,19 @@ public sealed class WindowsSendInputSink(AgentOptions options) : IWindowsInputSi
     /// disconnects mid-touch still gets its left-button-down released by ReleaseSessionInternal.
     private void ApplyAbsoluteTouch(Guid sessionId, AbsoluteTouchCommand touch)
     {
-        var monitor = ResolveExtendMonitor()
-            ?? throw new InputInjectionException("No extend-mode display is available for touch input.");
-        var (x, y) = NormalizeToVirtualDesktop(monitor, touch.XFraction, touch.YFraction);
+        // Unlike every other command here, a missing extend display is an expected, transient
+        // condition (extend mode not currently active on the Agent side, or the virtual display
+        // still settling right after attach) rather than a real injection failure -- throwing
+        // InputInjectionException would tear down the *entire* input session (see
+        // InputWebSocketEndpoint's catch), killing keyboard/mouse too and forcing a full
+        // reconnect over one stray touch. Drop it instead.
+        var monitor = ResolveExtendMonitor();
+        if (monitor is null)
+        {
+            logger.LogWarning("Ignoring absolute-touch input: no extend-mode display is currently attached.");
+            return;
+        }
+        var (x, y) = NormalizeToVirtualDesktop(monitor.Value, touch.XFraction, touch.YFraction);
         var moveInput = MouseInput(x, y, 0, MouseMove | MouseAbsolute | MouseVirtualDesk);
 
         if (!_heldMouseButtons.TryGetValue("left", out var owners))
