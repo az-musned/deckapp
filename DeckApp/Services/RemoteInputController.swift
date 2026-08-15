@@ -488,6 +488,15 @@ final class RemoteInputController {
         sendImmediately([.modifier(modifier, isDown: isDown)])
     }
 
+    /// Extend mode's touchscreen surface: xFraction/yFraction are normalized (0-1) positions
+    /// within the extend display, sent immediately (not delta-buffered like enqueuePointer)
+    /// so each phase of the touch lifecycle lands as its own discrete Agent command.
+    func sendAbsoluteTouch(xFraction: Double, yFraction: Double, phase: RemoteTouchPhase) {
+        guard connectionState.acceptsInput else { return }
+        lastInteraction = "Touch \(phase.rawValue)"
+        sendImmediately([.absoluteTouch(xFraction: xFraction, yFraction: yFraction, phase: phase)])
+    }
+
     func sendKey(_ key: RemoteVirtualKey) {
         guard connectionState.acceptsInput else { return }
         lastInteraction = key.rawValue

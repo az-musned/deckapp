@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using DeckWindowsAgent.Configuration;
+using DeckWindowsAgent.Screen;
 
 namespace DeckWindowsAgent.Input;
 
-public sealed class WindowsSendInputSink : IWindowsInputSink
+public sealed class WindowsSendInputSink(AgentOptions options) : IWindowsInputSink
 {
     private const uint InputMouse = 0;
     private const uint InputKeyboard = 1;
@@ -20,6 +22,12 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
     private const uint MiddleUp = 0x0040;
     private const uint MouseWheel = 0x0800;
     private const uint MouseHWheel = 0x1000;
+    private const uint MouseAbsolute = 0x8000;
+    private const uint MouseVirtualDesk = 0x4000;
+    private const int SmXVirtualScreen = 76;
+    private const int SmYVirtualScreen = 77;
+    private const int SmCxVirtualScreen = 78;
+    private const int SmCyVirtualScreen = 79;
     private const int WheelScale = 12;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -42,6 +50,9 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
             {
                 case RelativePointerCommand pointer:
                     SendMouse(ApplyPointerAcceleration(pointer.DeltaX, pointer.DeltaY, pointer.Acceleration));
+                    break;
+                case AbsoluteTouchCommand touch:
+                    ApplyAbsoluteTouch(sessionId, touch);
                     break;
                 case ScrollCommand scroll:
                     SendScroll(scroll);
@@ -197,6 +208,82 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
         SendChecked([MouseInput(delta.X, delta.Y, 0, MouseMove)]);
     }
 
+    /// Extend mode's iPad surface acts as a real touchscreen for the virtual display rather
+    /// than a relative trackpad: "began" moves the cursor to the touched point and presses the
+    /// left button there (in one SendInput call, so the click lands exactly where the finger
+    /// touched down, not wherever the cursor happened to already be); "moved" just moves the
+    /// (already-down) cursor for the drag; "ended"/"cancelled" moves once more to the final
+    /// point and releases. Button ownership reuses _heldMouseButtons so a session that
+    /// disconnects mid-touch still gets its left-button-down released by ReleaseSessionInternal.
+    private void ApplyAbsoluteTouch(Guid sessionId, AbsoluteTouchCommand touch)
+    {
+        var monitor = ResolveExtendMonitor()
+            ?? throw new InputInjectionException("No extend-mode display is available for touch input.");
+        var (x, y) = NormalizeToVirtualDesktop(monitor, touch.XFraction, touch.YFraction);
+        var moveInput = MouseInput(x, y, 0, MouseMove | MouseAbsolute | MouseVirtualDesk);
+
+        if (!_heldMouseButtons.TryGetValue("left", out var owners))
+        {
+            owners = [];
+            _heldMouseButtons["left"] = owners;
+        }
+
+        switch (touch.Phase)
+        {
+            case "began":
+                var isFirstDown = owners.Add(sessionId) && owners.Count == 1;
+                var downInputs = new List<NativeInput> { moveInput };
+                if (isFirstDown) downInputs.Add(MouseInput(x, y, 0, LeftDown));
+                SendChecked([.. downInputs]);
+                break;
+            case "moved":
+                SendChecked([moveInput]);
+                break;
+            case "ended" or "cancelled":
+                var isLastUp = owners.Remove(sessionId) && owners.Count == 0;
+                var upInputs = new List<NativeInput> { moveInput };
+                if (isLastUp) upInputs.Add(MouseInput(x, y, 0, LeftUp));
+                SendChecked([.. upInputs]);
+                if (owners.Count == 0) _heldMouseButtons.Remove("left");
+                break;
+            default:
+                throw new InputInjectionException("Unknown touch phase.");
+        }
+    }
+
+    private MonitorDescriptor? ResolveExtendMonitor()
+    {
+        var deviceName = options.ScreenStream.ExtendMonitorDeviceName ?? VirtualDisplayAttachment.FindVirtualDisplayDeviceName();
+        if (deviceName is null) return null;
+        foreach (var monitor in MonitorEnumerator.EnumerateAll())
+        {
+            if (string.Equals(monitor.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase)) return monitor;
+        }
+        return null;
+    }
+
+    /// SendInput's MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK flags take a position normalized
+    /// to 0-65535 across the *entire* virtual desktop (all monitors combined), not the target
+    /// monitor alone -- this maps the touch's monitor-relative fraction to a pixel position
+    /// within that monitor's bounds, then normalizes that pixel position against the virtual
+    /// desktop's bounds from GetSystemMetrics.
+    private static (int X, int Y) NormalizeToVirtualDesktop(MonitorDescriptor monitor, double xFraction, double yFraction)
+    {
+        var clampedX = Math.Clamp(xFraction, 0, 1);
+        var clampedY = Math.Clamp(yFraction, 0, 1);
+        var absoluteX = monitor.Left + (clampedX * monitor.Width);
+        var absoluteY = monitor.Top + (clampedY * monitor.Height);
+
+        var virtualLeft = GetSystemMetrics(SmXVirtualScreen);
+        var virtualTop = GetSystemMetrics(SmYVirtualScreen);
+        var virtualWidth = Math.Max(1, GetSystemMetrics(SmCxVirtualScreen) - 1);
+        var virtualHeight = Math.Max(1, GetSystemMetrics(SmCyVirtualScreen) - 1);
+
+        var normalizedX = (int)Math.Round((absoluteX - virtualLeft) * 65535.0 / virtualWidth);
+        var normalizedY = (int)Math.Round((absoluteY - virtualTop) * 65535.0 / virtualHeight);
+        return (Math.Clamp(normalizedX, 0, 65535), Math.Clamp(normalizedY, 0, 65535));
+    }
+
     private static void SendScroll(ScrollCommand scroll)
     {
         var inputs = new List<NativeInput>(2);
@@ -337,6 +424,9 @@ public sealed class WindowsSendInputSink : IWindowsInputSink
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint inputCount, [In] NativeInput[] inputs, int inputSize);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr OpenInputDesktop(uint flags, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint desiredAccess);

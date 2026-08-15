@@ -10,6 +10,9 @@ public interface IWindowsInputSink
 
 public abstract record AgentInputCommand;
 public sealed record RelativePointerCommand(double DeltaX, double DeltaY, bool Acceleration, bool Precision) : AgentInputCommand;
+/// <summary>Extend-mode touchscreen input: XFraction/YFraction are normalized (0-1) positions within the
+/// extend virtual display's bounds, Phase is "began"/"moved"/"ended"/"cancelled".</summary>
+public sealed record AbsoluteTouchCommand(double XFraction, double YFraction, string Phase) : AgentInputCommand;
 public sealed record ScrollCommand(double DeltaX, double DeltaY) : AgentInputCommand;
 public sealed record MouseButtonCommand(string Button, bool IsDown) : AgentInputCommand;
 public sealed record VirtualKeyCommand(string Key, bool IsDown, int Modifiers) : AgentInputCommand;

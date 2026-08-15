@@ -173,8 +173,10 @@ public sealed class VirtualDisplayAttachment(ILogger<VirtualDisplayAttachment> l
     /// 17 across two sessions during development), so this can never be cached/hardcoded --
     /// it's re-resolved via EnumDisplayDevices (which, unlike EnumDisplayMonitors, reports
     /// adapters regardless of whether their monitor is currently attached to the desktop)
-    /// every time.
-    private static string? FindVirtualDisplayDeviceName()
+    /// every time. Public: this is a deterministic, hardware-ID-based lookup (unlike
+    /// VirtualDisplayDriverLocator's resolution-matching heuristic), so capture-source and
+    /// absolute-touch-input resolution both prefer it over that heuristic.
+    public static string? FindVirtualDisplayDeviceName()
     {
         uint index = 0;
         while (true)

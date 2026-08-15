@@ -44,7 +44,7 @@ public static class MonitorEnumerator
         var isPrimary = (info.dwFlags & NativeMethods.MonitorInfoFPrimary) != 0;
         var width = info.rcMonitor.Right - info.rcMonitor.Left;
         var height = info.rcMonitor.Bottom - info.rcMonitor.Top;
-        descriptor = new MonitorDescriptor(info.szDevice, isPrimary, width, height);
+        descriptor = new MonitorDescriptor(info.szDevice, isPrimary, info.rcMonitor.Left, info.rcMonitor.Top, width, height);
         return true;
     }
 

@@ -24,6 +24,8 @@ public static class InputPayloadParser
         {
             "relativePointer" => new RelativePointerCommand(
                 Number(value, "deltaX"), Number(value, "deltaY"), Boolean(value, "acceleration"), Boolean(value, "precision")),
+            "absoluteTouch" => new AbsoluteTouchCommand(
+                Number(value, "xFraction"), Number(value, "yFraction"), String(value, "phase", 16)),
             "scroll" => new ScrollCommand(Number(value, "deltaX"), Number(value, "deltaY")),
             "mouseButton" => new MouseButtonCommand(String(value, "_0"), Boolean(value, "isDown")),
             "virtualKey" => new VirtualKeyCommand(String(value, "_0"), Boolean(value, "isDown"), Modifiers(value, "modifiers")),
@@ -41,6 +43,7 @@ public static class InputPayloadParser
         MouseButtonCommand { IsDown: false } => true,
         VirtualKeyCommand { IsDown: false } => true,
         ModifierCommand { IsDown: false } => true,
+        AbsoluteTouchCommand { Phase: "ended" or "cancelled" } => true,
         ReleaseAllCommand => true,
         _ => false
     };

@@ -106,6 +106,15 @@ enum RemoteMouseButton: String, Codable, CaseIterable, Sendable {
     case middle
 }
 
+/// Extend mode's touch phases, mirroring UIKit's touchesBegan/Moved/Ended/Cancelled so a
+/// touch's full down-drag-up lifecycle maps 1:1 onto the Windows Agent's absolute pointer.
+enum RemoteTouchPhase: String, Codable, Sendable {
+    case began
+    case moved
+    case ended
+    case cancelled
+}
+
 enum RemoteVirtualKey: String, Codable, CaseIterable, Sendable {
     case enter
     case tab
@@ -180,12 +189,15 @@ enum RemoteInputPayload: Codable, Sendable, Equatable {
     case modifier(RemoteModifiers, isDown: Bool)
     case unicodeText(String)
     case clipboardText(String, pasteAfterCopy: Bool)
+    case absoluteTouch(xFraction: Double, yFraction: Double, phase: RemoteTouchPhase)
     case releaseAll
 
     nonisolated var isReleasePriority: Bool {
         switch self {
         case .mouseButton(_, false), .virtualKey(_, false, _), .modifier(_, false), .releaseAll:
             true
+        case .absoluteTouch(_, _, let phase):
+            phase == .ended || phase == .cancelled
         default:
             false
         }

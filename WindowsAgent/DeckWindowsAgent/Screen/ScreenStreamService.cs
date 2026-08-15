@@ -242,9 +242,16 @@ public sealed class ScreenStreamService(
             if (_activeMode is not { } mode) return null;
             if (_source is not null) return _source;
 
+            // The hardware-ID-based lookup (device ID prefix "Root\MttVDD") is deterministic and
+            // tried first; it's what VirtualDisplayAttachment already used to attach the display
+            // above, so if that succeeded this will find the same monitor. The resolution-matching
+            // heuristic in extendMonitorLocator is only a fallback for a differently-built driver
+            // that doesn't use that device ID prefix.
             var deviceName = mode == ScreenStreamMode.Mirror
                 ? options.ScreenStream.MirrorMonitorDeviceName
-                : options.ScreenStream.ExtendMonitorDeviceName ?? extendMonitorLocator.TryResolveDeviceName();
+                : options.ScreenStream.ExtendMonitorDeviceName
+                    ?? VirtualDisplayAttachment.FindVirtualDisplayDeviceName()
+                    ?? extendMonitorLocator.TryResolveDeviceName();
             try
             {
                 _source = sourceFactory.Create(deviceName);
