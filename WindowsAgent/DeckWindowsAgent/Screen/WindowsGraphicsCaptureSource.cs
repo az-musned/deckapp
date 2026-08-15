@@ -57,7 +57,26 @@ public sealed class WindowsGraphicsCaptureSource : IScreenCaptureSource
 
         lock (_gate)
         {
-            using var captured = _framePool.TryGetNextFrame();
+            // Direct3D11CaptureFramePool queues up to its configured capacity (2, see the
+            // constructor) and TryGetNextFrame dequeues the OLDEST one. Pulling only a single
+            // frame per call -- what this used to do -- falls permanently behind whenever the
+            // compositor produces frames faster than the fixed-rate capture loop calls this
+            // (RunCaptureLoopAsync polls at TargetFps; the real display composites independently
+            // of that): each tick serves an ever-older frame off the back of a queue that keeps
+            // refilling faster than it drains, and the app has no way to observe or correct that
+            // growing gap from the outside -- it just looks like fixed but noticeably-in-the-past
+            // video, exactly matching a report of ~1s touch-to-visual delay despite clean
+            // 0%-loss/8ms-jitter/7ms-decode network+client stats (i.e. everything downstream of
+            // capture was fine; the frame handed to the encoder was already stale). Draining every
+            // currently-queued frame and keeping only the newest collapses a temporarily-full
+            // queue back to "latest" every tick instead of slowly working through a backlog.
+            Direct3D11CaptureFrame? latest = null;
+            while (_framePool.TryGetNextFrame() is { } next)
+            {
+                latest?.Dispose();
+                latest = next;
+            }
+            using var captured = latest;
             if (captured is null) return false;
 
             var access = captured.Surface.As<IDirect3DDxgiInterfaceAccess>();
