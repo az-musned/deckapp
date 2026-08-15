@@ -2,12 +2,27 @@ import SwiftUI
 import UIKit
 @preconcurrency import WebRTC
 
+private struct OverlayControlFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        guard next != .zero else { return }
+        value = next
+    }
+}
+
 struct FullScreenScreenMirrorView: View {
     @Environment(\.dismiss) private var dismiss
     let store: ScreenMirrorStore
     let remote: RemoteInputController
     @State private var isDragging = false
     @State private var videoSize = CGSize.zero
+    // Both touch surfaces below are full-screen and sit underneath the close button in the
+    // ZStack, but their own UIKit-level touch handling doesn't respect that SwiftUI z-order --
+    // they'll happily claim touches that land visually on the button too. Tracking the
+    // button's actual on-screen frame and excluding it from both surfaces lets the close
+    // button reliably receive its own taps.
+    @State private var closeButtonFrame: CGRect = .zero
 
     var body: some View {
         GeometryReader { proxy in
@@ -45,7 +60,7 @@ struct FullScreenScreenMirrorView: View {
                         // Extend mode is a real second monitor, so touch acts like a
                         // touchscreen -- tap/drag position maps 1:1 onto the virtual
                         // display, unlike mirror mode's relative trackpad below.
-                        RemoteAbsoluteTouchSurface { point, phase in
+                        RemoteAbsoluteTouchSurface(excludedRegions: [closeButtonFrame]) { point, phase in
                             guard let fraction = Self.absoluteTouchFraction(
                                 for: point,
                                 proxySize: proxy.size,
@@ -69,12 +84,22 @@ struct FullScreenScreenMirrorView: View {
                             dragChanged: { active in
                                 isDragging = active
                                 remote.setDrag(active: active)
-                            }
+                            },
+                            excludedRegions: [closeButtonFrame]
                         )
                     }
                 }
 
                 closeButton
+                    .background(
+                        GeometryReader { buttonProxy in
+                            Color.clear.preference(
+                                key: OverlayControlFramePreferenceKey.self,
+                                value: buttonProxy.frame(in: .named("screenMirrorOverlay"))
+                            )
+                        }
+                    )
+                    .onPreferenceChange(OverlayControlFramePreferenceKey.self) { closeButtonFrame = $0 }
 
                 if isDragging {
                     draggingBanner
@@ -84,6 +109,7 @@ struct FullScreenScreenMirrorView: View {
                     statsOverlay(statsText)
                 }
             }
+            .coordinateSpace(name: "screenMirrorOverlay")
         }
         .background(Color.black.ignoresSafeArea())
         .task {
@@ -258,7 +284,7 @@ private struct ScreenMirrorFrameView: UIViewRepresentable {
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
         uiView.videoContentMode = contentMode
         guard context.coordinator.attachedTrack !== videoTrack else { return }
-        detachSizeObserver(from: context.coordinator.attachedTrack, coordinator: context.coordinator)
+        Self.detachSizeObserver(from: context.coordinator.attachedTrack, coordinator: context.coordinator)
         context.coordinator.attachedTrack?.remove(uiView)
         videoTrack.add(uiView)
         context.coordinator.attachedTrack = videoTrack
@@ -289,13 +315,21 @@ private struct ScreenMirrorFrameView: UIViewRepresentable {
 /// purely to learn the video's actual pixel dimensions (`setSize`) -- needed so extend mode's
 /// touch surface can compute the real letterboxed content rect instead of assuming the video
 /// fills its container. Multiple `RTCVideoRenderer`s can observe one track simultaneously.
-private final class VideoSizeObserver: NSObject, RTCVideoRenderer {
-    var onSizeChange: ((CGSize) -> Void)?
+// nonisolated: WebRTC invokes RTCVideoRenderer methods from its own internal capture/render
+// thread, not the main actor. Under this project's SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor,
+// leaving this class main-actor-isolated by default makes the Swift runtime trap
+// (_checkExpectedExecutor / dispatch_assert_queue_fail) the moment WebRTC calls setSize(_:)
+// off-main -- observed as an EXC_BREAKPOINT crash as soon as extend mode starts receiving
+// frames. `onSizeChange` is assigned once right after construction, before the observer is
+// handed to WebRTC, and never mutated afterward, so reading it from an arbitrary thread here
+// is safe despite not being statically provable to the compiler.
+private final class VideoSizeObserver: NSObject, RTCVideoRenderer, @unchecked Sendable {
+    nonisolated(unsafe) var onSizeChange: ((CGSize) -> Void)?
 
-    func setSize(_ size: CGSize) {
+    nonisolated func setSize(_ size: CGSize) {
         let callback = onSizeChange
         DispatchQueue.main.async { callback?(size) }
     }
 
-    func renderFrame(_ frame: RTCVideoFrame?) {}
+    nonisolated func renderFrame(_ frame: RTCVideoFrame?) {}
 }
