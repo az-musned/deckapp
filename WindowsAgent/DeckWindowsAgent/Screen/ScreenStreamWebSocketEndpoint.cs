@@ -28,7 +28,6 @@ public static class ScreenStreamWebSocketEndpoint
         var pairing = context.RequestServices.GetRequiredService<PairingService>();
         var safety = context.RequestServices.GetRequiredService<AgentSafetyState>();
         var options = context.RequestServices.GetRequiredService<AgentOptions>();
-        var broadcaster = context.RequestServices.GetRequiredService<ScreenStreamBroadcaster>();
         var streamService = context.RequestServices.GetRequiredService<ScreenStreamService>();
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger("DeckWindowsAgent.ScreenStreamWebSocket");
@@ -41,19 +40,20 @@ public static class ScreenStreamWebSocketEndpoint
             ? ScreenStreamMode.Extend
             : ScreenStreamMode.Mirror;
 
-        if (!streamService.TryReserveMode(mode, out var conflictReason))
-        {
-            context.Response.StatusCode = StatusCodes.Status409Conflict;
-            await context.Response.WriteAsJsonAsync(new { error = conflictReason });
-            return;
-        }
-
-        ScreenStreamSubscription subscription;
-        try { subscription = broadcaster.Reserve(); }
+        ScreenStreamSubscription? subscription;
+        string? conflictReason;
+        try { subscription = streamService.TryReserveMode(mode, out conflictReason); }
         catch (InvalidOperationException error)
         {
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
             await context.Response.WriteAsJsonAsync(new { error = error.Message });
+            return;
+        }
+
+        if (subscription is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status409Conflict;
+            await context.Response.WriteAsJsonAsync(new { error = conflictReason });
             return;
         }
 

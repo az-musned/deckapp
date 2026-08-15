@@ -40,11 +40,17 @@ public sealed class ScreenStreamService(
 
     /// Called by the WebSocket endpoint before subscribing a new client. Locks in the
     /// stream's active mode while any subscriber is connected; rejects a connection
-    /// requesting a different mode than the one currently active.
-    public bool TryReserveMode(ScreenStreamMode mode, out string? conflictReason)
+    /// requesting a different mode than the one currently active. Returns the reserved
+    /// subscription slot (null on conflict) -- the caller must not call
+    /// ScreenStreamBroadcaster.Reserve() itself; see the atomicity note below.
+    /// Throws InvalidOperationException (via ScreenStreamBroadcaster.Reserve) if the mode is
+    /// already active and at MaximumClients.
+    public ScreenStreamSubscription? TryReserveMode(ScreenStreamMode mode, out string? conflictReason)
     {
-        ScreenStreamMode? previousMode;
-        bool reserved;
+        ScreenStreamMode? previousMode = null;
+        ScreenStreamSubscription? subscription = null;
+        var attachTransition = false;
+
         lock (_modeGate)
         {
             if (broadcaster.SubscriberCount == 0 || _activeMode is null)
@@ -52,20 +58,33 @@ public sealed class ScreenStreamService(
                 previousMode = _activeMode;
                 if (_activeMode != mode) TearDownCaptureLocked();
                 _activeMode = mode;
+                // SubscriberCount is 0 here, so Reserve() cannot throw (MaximumClients is
+                // always >= 1) -- safe to call after already mutating _activeMode above.
+                subscription = broadcaster.Reserve();
                 conflictReason = null;
-                reserved = true;
+                attachTransition = true;
             }
             else if (_activeMode == mode)
             {
-                previousMode = _activeMode;
+                // Reserving _activeMode and the subscriber slot together, under the same
+                // lock, is the whole point of this method no longer being a plain bool: the
+                // capture loop's active-check (RunCaptureLoopAsync) reads
+                // broadcaster.SubscriberCount to decide whether to tear down/detach, and it
+                // used to be possible for _activeMode to already read Extend here while
+                // SubscriberCount was still 0 -- the caller used to reserve the broadcaster
+                // slot as a separate step *after* this method returned, leaving a window (up
+                // to ~1s, however long TryAttach's own polling below took) where the capture
+                // loop saw "Extend mode active, zero subscribers" and detached the virtual
+                // display it had just attached (or was mid-attaching), out from under a
+                // client that was very much still connecting. Confirmed live on-device: the
+                // virtual display attached and a client connected in Extend mode, then it was
+                // detached again immediately, well before any disconnect.
+                subscription = broadcaster.Reserve();
                 conflictReason = null;
-                reserved = true;
             }
             else
             {
-                previousMode = null;
                 conflictReason = $"Screen streaming is currently active in {_activeMode} mode.";
-                reserved = false;
             }
         }
 
@@ -76,13 +95,13 @@ public sealed class ScreenStreamService(
         // mode still runs even if there's no virtual display to attach (falls back to whatever
         // ExtendMonitorDeviceName/auto-detect resolves, same as before this existed), it just
         // won't have a real second monitor to capture.
-        if (reserved)
+        if (attachTransition)
         {
             if (mode == ScreenStreamMode.Extend) virtualDisplay.TryAttach();
             else if (previousMode == ScreenStreamMode.Extend) virtualDisplay.Detach();
         }
 
-        return reserved;
+        return subscription;
     }
 
     /// Forces the next encoded frame to be a fresh keyframe (with in-band SPS/PPS) by
