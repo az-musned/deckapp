@@ -6,6 +6,7 @@ struct ControlDeckView: View {
     @State private var showEditor = false
     @State private var presentedFolder: ControlDeckItem?
     @State private var itemAwaitingConfirmation: ControlDeckItem?
+    @State private var availableWidth: CGFloat = 0
     let compact: Bool
 
     var body: some View {
@@ -59,6 +60,11 @@ struct ControlDeckView: View {
                 .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.accent.opacity(0.08), interactive: true)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newValue in
+            availableWidth = newValue
+        }
         .sheet(isPresented: $showEditor) {
             ControlDeckEditorView()
         }
@@ -107,11 +113,17 @@ struct ControlDeckView: View {
         }
     }
 
+    /// Derives column count from the actual width available to this view, rather than
+    /// device orientation, so a narrower widget card (e.g. an iPad "medium" override)
+    /// doesn't get squeezed into more columns than it can comfortably fit.
     private var deckColumnCount: Int {
-        guard UIDevice.current.userInterfaceIdiom == .pad else { return 2 }
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let orientation = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.interfaceOrientation
-        return orientation?.isLandscape == true ? 8 : 4
+        guard availableWidth > 0 else {
+            return UIDevice.current.userInterfaceIdiom == .pad ? 4 : 2
+        }
+        let minTileWidth: CGFloat = 100
+        let spacing = DesignToken.Spacing.small
+        let columns = Int((availableWidth + spacing) / (minTileWidth + spacing))
+        return max(2, min(columns, 8))
     }
 
     private func run(_ item: ControlDeckItem) {
@@ -276,7 +288,9 @@ private struct ControlDeckVolumeWidget: View {
             Slider(value: Binding(
                 get: { appState.dashboard.pc.volume },
                 set: { appState.dashboard.pc.volume = $0 }
-            ))
+            ), onEditingChanged: { editing in
+                if editing { RemoteHaptics.heavy() }
+            })
             .tint(Color.controlDeckTint(named: item.tintName))
         }
         .padding(DesignToken.Spacing.small)
