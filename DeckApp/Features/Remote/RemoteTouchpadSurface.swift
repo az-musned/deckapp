@@ -13,11 +13,6 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
     /// finger is on the touchpad, so an ordinary pointer-move swipe doesn't also
     /// scroll the page underneath it.
     var touchActiveChanged: (Bool) -> Void = { _ in }
-    /// Regions (in this view's own coordinate space) that should never start a touchpad
-    /// gesture -- e.g. a close button layered on top of a full-screen touchpad surface, whose
-    /// SwiftUI z-order alone doesn't stop this view's UIKit gesture recognizers from also
-    /// accepting touches that land on it.
-    var excludedRegions: [CGRect] = []
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -59,7 +54,8 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
 
         tap.require(toFail: pointerPan)
         twoFingerTap.require(toFail: scrollPan)
-        [pointerPan, scrollPan, tap, twoFingerTap, longPress, touchTracker].forEach { $0.delegate = context.coordinator }
+        pointerPan.delegate = context.coordinator
+        longPress.delegate = context.coordinator
 
         [pointerPan, scrollPan, tap, twoFingerTap, longPress, touchTracker].forEach(view.addGestureRecognizer)
         view.accessibilityLabel = "Windows PC touchpad"
@@ -145,12 +141,6 @@ struct RemoteTouchpadSurface: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             true
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard let view = gestureRecognizer.view else { return true }
-            let location = touch.location(in: view)
-            return !parent.excludedRegions.contains { $0.contains(location) }
         }
     }
 }

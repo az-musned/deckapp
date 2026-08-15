@@ -2,27 +2,23 @@ import SwiftUI
 import UIKit
 @preconcurrency import WebRTC
 
-private struct OverlayControlFramePreferenceKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        guard next != .zero else { return }
-        value = next
-    }
-}
-
 struct FullScreenScreenMirrorView: View {
     @Environment(\.dismiss) private var dismiss
     let store: ScreenMirrorStore
     let remote: RemoteInputController
     @State private var isDragging = false
     @State private var videoSize = CGSize.zero
-    // Both touch surfaces below are full-screen and sit underneath the close button in the
-    // ZStack, but their own UIKit-level touch handling doesn't respect that SwiftUI z-order --
-    // they'll happily claim touches that land visually on the button too. Tracking the
-    // button's actual on-screen frame and excluding it from both surfaces lets the close
-    // button reliably receive its own taps.
-    @State private var closeButtonFrame: CGRect = .zero
+    // Both touch surfaces below are full-screen UIViewRepresentables handling their own raw
+    // UIKit touch/gesture dispatch, and relying on them to correctly defer to a SwiftUI Button
+    // layered on top (via a hit-test delegate/override checking the button's measured frame)
+    // turned out to be fragile in practice -- whether that actually works depends on exactly
+    // how SwiftUI happens to compose UIViewRepresentable content into the real UIKit view
+    // hierarchy, which isn't documented or guaranteed. The robust fix is to make the two views
+    // never physically overlap in the first place: reserve a fixed strip across the top of the
+    // screen -- comfortably larger than the close button's rendered footprint -- that the touch
+    // surfaces are simply never given as part of their own frame. With no overlap, there's no
+    // hit-testing ambiguity left to get wrong.
+    private static let closeButtonReservedHeight: CGFloat = 100
 
     var body: some View {
         GeometryReader { proxy in
@@ -59,20 +55,29 @@ struct FullScreenScreenMirrorView: View {
                     if store.mode == .extend {
                         // Extend mode is a real second monitor, so touch acts like a
                         // touchscreen -- tap/drag position maps 1:1 onto the virtual
-                        // display, unlike mirror mode's relative trackpad below.
-                        RemoteAbsoluteTouchSurface(excludedRegions: [closeButtonFrame]) { point, phase in
+                        // display, unlike mirror mode's relative trackpad below. Inset from
+                        // the top to physically clear the close button (see
+                        // closeButtonReservedHeight); the touch point this surface reports is
+                        // in its own (inset) local space, so the reserved height is added back
+                        // before feeding it to absoluteTouchFraction, which expects points in
+                        // the outer, un-inset proxy space.
+                        RemoteAbsoluteTouchSurface { point, phase in
+                            let outerPoint = CGPoint(x: point.x, y: point.y + Self.closeButtonReservedHeight)
                             guard let fraction = Self.absoluteTouchFraction(
-                                for: point,
+                                for: outerPoint,
                                 proxySize: proxy.size,
                                 isPortraitSpace: isPortraitSpace,
                                 videoSize: videoSize
                             ) else { return }
                             remote.sendAbsoluteTouch(xFraction: fraction.x, yFraction: fraction.y, phase: phase)
                         }
+                        .padding(.top, Self.closeButtonReservedHeight)
                     } else {
                         // Touch-as-trackpad control over the PC while watching -- same
                         // relative-delta gesture surface used in the dedicated Remote tab
-                        // (RemoteControlView.swift), reused here rather than rebuilt.
+                        // (RemoteControlView.swift), reused here rather than rebuilt. Also
+                        // inset from the top; harmless here since this surface only ever
+                        // reports relative deltas, which an inset doesn't change.
                         RemoteTouchpadSurface(
                             pointerMoved: { dx, dy in remote.enqueuePointer(deltaX: dx, deltaY: dy) },
                             scrolled: { dx, dy in remote.enqueueScroll(deltaX: dx, deltaY: dy) },
@@ -84,22 +89,13 @@ struct FullScreenScreenMirrorView: View {
                             dragChanged: { active in
                                 isDragging = active
                                 remote.setDrag(active: active)
-                            },
-                            excludedRegions: [closeButtonFrame]
+                            }
                         )
+                        .padding(.top, Self.closeButtonReservedHeight)
                     }
                 }
 
                 closeButton
-                    .background(
-                        GeometryReader { buttonProxy in
-                            Color.clear.preference(
-                                key: OverlayControlFramePreferenceKey.self,
-                                value: buttonProxy.frame(in: .named("screenMirrorOverlay"))
-                            )
-                        }
-                    )
-                    .onPreferenceChange(OverlayControlFramePreferenceKey.self) { closeButtonFrame = $0 }
 
                 if isDragging {
                     draggingBanner
@@ -109,7 +105,6 @@ struct FullScreenScreenMirrorView: View {
                     statsOverlay(statsText)
                 }
             }
-            .coordinateSpace(name: "screenMirrorOverlay")
         }
         .background(Color.black.ignoresSafeArea())
         .task {
