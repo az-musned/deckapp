@@ -120,7 +120,9 @@ Applications and games must be explicitly allowlisted in ignored `appsettings.Lo
 
 Do not create router port-forwarding rules. Outside-home access must use a private VPN such as Tailscale or a future authenticated relay.
 
-`appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate, trusts that root for the current Windows user so the Agent's strict certificate lookup succeeds, verifies the server IP SAN and non-exportable private keys, and restricts its firewall rule to the selected private address, its exact Windows interface, and `LocalSubnet`. Windows Mobile Hotspot interfaces do not expose a normal NLA profile, so the rule applies across profiles but cannot match another interface or address; it does not create router forwarding or allow non-local peers.
+`appsettings.Local.json`, private keys, and generated certificates are intentionally ignored by Git. The setup script exports only the public root certificate, trusts that root for the current Windows user so the Agent's strict certificate lookup succeeds, verifies the server IP SAN and non-exportable private keys, and restricts its firewall rules to the selected private address, its exact Windows interface, and `LocalSubnet`. Windows Mobile Hotspot interfaces do not expose a normal NLA profile, so the rules apply across profiles but cannot match another interface or address; they do not create router forwarding or allow non-local peers.
+
+Screen mirroring's WebRTC media (ICE connectivity checks, then DTLS/SRTP for the video itself) is a separate UDP connection from the TCP signaling port above, so the setup script opens a second, equally scoped firewall rule for a fixed UDP port range (`50000-50020` by default; override with `-IceUdpPortRangeStart`/`-IceUdpPortRangeEnd`, matching `Agent:ScreenStream:IceUdpPortRangeStart`/`IceUdpPortRangeEnd` if you change the defaults there). Screen mirroring will otherwise connect (the signaling WebSocket only needs the TCP port) but the video stream will hang indefinitely in a "checking" ICE state.
 
 ## Discord widget (optional)
 

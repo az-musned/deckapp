@@ -41,6 +41,7 @@ public sealed class H264Encoder : IDisposable
         if (chosen is null) throw new InvalidOperationException("No H.264 encoder MFT is available on this system.");
 
         _transform = chosen.ActivateObject<IMFTransform>();
+        ConfigureRealtimeEncoding(_transform);
 
         var frameSize = PackDimensions(width, height);
         var frameRate = PackDimensions(fps, 1);
@@ -66,6 +67,97 @@ public sealed class H264Encoder : IDisposable
 
         _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, 0);
         _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, 0);
+    }
+
+    /// Without this, Media Foundation's H.264 encoder defaults to using B-frames, which
+    /// require frame reordering (decode order != presentation/RTP-send order). RTP timestamps
+    /// here are assigned in simple encode-call order (see ScreenStreamService.RtpDurationUnits),
+    /// which assumes no reordering -- correct for the zero-B-frame baseline/low-latency profile
+    /// WebRTC expects, but not for a B-frame stream. With B-frames, a receiver decoding in
+    /// arrival order keeps stalling on forward references it doesn't have yet, which is exactly
+    /// the "frames received but not decoded" pattern that showed up in WebRTC receiver stats
+    /// (framesReceived climbing far faster than framesDecoded, framesDropped tracking
+    /// framesDecoded almost 1:1) during investigation of choppy ~1fps-looking playback despite
+    /// a clean, steady encode/publish rate on this side. CODECAPI_AVEncCommonLowLatency is
+    /// Microsoft's documented mechanism for disabling B-frames on its H.264 MFT; the explicit
+    /// B-picture-count-0 call is a belt-and-suspenders in case a given encoder only honors that
+    /// specific knob. Best-effort: not every encoder implementation (e.g. some hardware MFTs)
+    /// supports every CODECAPI property, so failures here are swallowed rather than thrown --
+    /// worst case the encoder falls back to its default (possibly B-frame-including) behavior.
+    private static void ConfigureRealtimeEncoding(IMFTransform transform)
+    {
+        var codecApiGuid = typeof(ICodecApi).GUID;
+        if (Marshal.QueryInterface(transform.NativePointer, in codecApiGuid, out var codecApiPointer) != 0) return;
+        try
+        {
+            var codecApi = (ICodecApi)Marshal.GetTypedObjectForIUnknown(codecApiPointer, typeof(ICodecApi));
+            TrySetValue(codecApi, CodecApiGuids.AVEncCommonLowLatency, true);
+            TrySetValue(codecApi, CodecApiGuids.AVEncCommonRealTime, true);
+            TrySetValue(codecApi, CodecApiGuids.AVEncMPVDefaultBPictureCount, 0u);
+            // CBR (eAVEncCommonRateControlMode_CBR = 0): many MF encoders default to a
+            // VBR/quality-targeting rate control mode that buffers several frames internally to
+            // smooth bitrate against a quality target, adding encode-side latency on top of the
+            // B-frame reordering fixed above. CBR trades some quality for not doing that.
+            TrySetValue(codecApi, CodecApiGuids.AVEncCommonRateControlMode, 0u);
+        }
+        finally
+        {
+            Marshal.Release(codecApiPointer);
+        }
+
+        // Deliberately not using a `ref object` SetValue signature: letting the CLR's
+        // built-in "automatic VARIANT" COM interop marshal an `object` parameter for a
+        // custom interface method is a .NET Framework-era feature that .NET (Core) doesn't
+        // implement -- confirmed by testing in an isolated harness first, where it threw
+        // NotImplementedException on every call rather than reaching the actual encoder.
+        // Building the VARIANT explicitly via Marshal.GetNativeVariantForObject and passing
+        // it as a plain IntPtr avoids that gap. Not every property is supported by every
+        // encoder MFT (E_NOTIMPL is common and fine -- best-effort, not fatal); B-picture
+        // count specifically is the one that matters here and is broadly supported.
+        static void TrySetValue(ICodecApi codecApi, Guid api, object value)
+        {
+            var variant = Marshal.AllocHGlobal(16);
+            try
+            {
+                Marshal.GetNativeVariantForObject(value, variant);
+                codecApi.SetValue(ref api, variant);
+            }
+            finally
+            {
+                NativeMethods.VariantClear(variant);
+                Marshal.FreeHGlobal(variant);
+            }
+        }
+    }
+
+    private static class CodecApiGuids
+    {
+        // From codecapi.h. Values verified against the Windows SDK header, not guessed --
+        // getting one of these wrong would silently target the wrong (or no) encoder property.
+        public static readonly Guid AVEncCommonLowLatency = new("9d3ecd55-89e8-490a-970a-0c9548d5a56e");
+        public static readonly Guid AVEncCommonRealTime = new("143a0ff6-a131-43da-b81e-98fbb8ec378e");
+        public static readonly Guid AVEncMPVDefaultBPictureCount = new("8d390aac-dc5c-4200-b57f-814d04babab2");
+        public static readonly Guid AVEncCommonRateControlMode = new("1c0608e9-370c-4710-8a58-cb6181c42423");
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("oleaut32.dll", PreserveSig = false)]
+        public static extern void VariantClear(IntPtr variant);
+    }
+
+    [ComImport]
+    [Guid("901DB4C7-31CE-41A2-85DC-8FA0BF41B8DA")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ICodecApi
+    {
+        [PreserveSig] int IsSupported(ref Guid api);
+        [PreserveSig] int IsModifiable(ref Guid api);
+        [PreserveSig] int GetParameterRange(ref Guid api, IntPtr min, IntPtr max, IntPtr delta);
+        [PreserveSig] int GetParameterValues(ref Guid api, out IntPtr values, out uint count);
+        [PreserveSig] int GetDefaultValue(ref Guid api, IntPtr value);
+        [PreserveSig] int GetValue(ref Guid api, IntPtr value);
+        [PreserveSig] int SetValue(ref Guid api, IntPtr value);
     }
 
     public EncodedFrame? Encode(in CapturedFrame frame)

@@ -124,7 +124,7 @@ private struct ScreenMirrorLauncherWidget: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreenMirror) {
-            FullScreenScreenMirrorView(store: store)
+            FullScreenScreenMirrorView(store: store, remote: remote)
         }
     }
 
@@ -1075,10 +1075,10 @@ private struct MockPCPowerWidget: View {
             quickLaunchRow
         }
         .fullScreenCover(isPresented: $showFullScreenMirror) {
-            FullScreenScreenMirrorView(store: appState.remoteInput.screenMirror)
+            FullScreenScreenMirrorView(store: appState.remoteInput.screenMirror, remote: appState.remoteInput)
         }
         .fullScreenCover(isPresented: $showFullScreenExtend) {
-            FullScreenScreenMirrorView(store: appState.remoteInput.extendDisplay)
+            FullScreenScreenMirrorView(store: appState.remoteInput.extendDisplay, remote: appState.remoteInput)
         }
     }
 

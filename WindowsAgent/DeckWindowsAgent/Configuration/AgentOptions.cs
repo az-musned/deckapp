@@ -22,11 +22,6 @@ public sealed class AgentOptions
     public string DiscordClientId { get; init; } = string.Empty;
     public string DiscordClientSecret { get; init; } = string.Empty;
 
-    /// <summary>Discord Application client ID/secret (developer.discord.com) used for the local RPC bridge.
-    /// Optional: when either is blank the Discord widget stays unavailable instead of failing startup.</summary>
-    public string DiscordClientId { get; init; } = string.Empty;
-    public string DiscordClientSecret { get; init; } = string.Empty;
-
     public void Validate()
     {
         var addresses = EffectiveBindAddresses;
@@ -114,16 +109,28 @@ public sealed class ScreenStreamOptions
     public string? MirrorMonitorDeviceName { get; init; }
     public string? ExtendMonitorDeviceName { get; init; }
 
+    // WebRTC's media path (ICE connectivity checks, then DTLS/SRTP) is a UDP connection
+    // separate from the signaling WebSocket, and needs its own firewall allowance. Pinning
+    // SIPSorcery to this narrow, fixed range -- instead of letting it pick an OS-ephemeral
+    // port per connection -- is what makes a tightly scoped firewall rule possible at all;
+    // Configure-LocalConnection.ps1's UDP rule must open exactly this range. Sized for
+    // MaximumClients (4) plus headroom for a reconnect briefly overlapping the connection
+    // it's replacing.
+    public int IceUdpPortRangeStart { get; init; } = 50000;
+    public int IceUdpPortRangeEnd { get; init; } = 50020;
+
     public void Validate()
     {
-        if (TargetFps is < 5 or > 30)
-            throw new InvalidOperationException("Agent:ScreenStream:TargetFps must be between 5 and 30.");
+        if (TargetFps is < 5 or > 60)
+            throw new InvalidOperationException("Agent:ScreenStream:TargetFps must be between 5 and 60.");
         if (MaxWidth is < 640 or > 3840)
             throw new InvalidOperationException("Agent:ScreenStream:MaxWidth must be between 640 and 3840.");
         if (BitrateKbps is < 500 or > 20000)
             throw new InvalidOperationException("Agent:ScreenStream:BitrateKbps must be between 500 and 20000.");
         if (MaximumClients is < 1 or > 4)
             throw new InvalidOperationException("Agent:ScreenStream:MaximumClients must be between 1 and 4.");
+        if (IceUdpPortRangeStart is < 1024 or > 65534 || IceUdpPortRangeEnd <= IceUdpPortRangeStart || IceUdpPortRangeEnd > 65535)
+            throw new InvalidOperationException("Agent:ScreenStream:IceUdpPortRangeStart/End must describe a valid range within 1024-65535.");
     }
 }
 

@@ -3,8 +3,21 @@ param(
     [string]$BindAddress = "",
     [ValidateRange(1024, 65535)]
     [int]$Port = 8732,
+    # Must match Agent:ScreenStream:IceUdpPortRangeStart/End in appsettings (defaults in
+    # AgentOptions.cs: 50000-50020) -- this is WebRTC's UDP media path (ICE connectivity
+    # checks, then DTLS/SRTP for the actual video), separate from the TCP signaling port
+    # above. SIPSorcery is pinned to this exact range in ScreenStreamWebSocketEndpoint.cs
+    # specifically so this rule can stay narrow instead of opening the full OS-ephemeral range.
+    [ValidateRange(1024, 65535)]
+    [int]$IceUdpPortRangeStart = 50000,
+    [ValidateRange(1024, 65535)]
+    [int]$IceUdpPortRangeEnd = 50020,
     [switch]$SkipFirewall
 )
+
+if ($IceUdpPortRangeEnd -le $IceUdpPortRangeStart) {
+    throw "IceUdpPortRangeEnd must be greater than IceUdpPortRangeStart."
+}
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -162,38 +175,38 @@ try {
     $certificateStore.Close()
 }
 
-$capabilitySettings = [ordered]@{
-    WindowsAudioEnabled = $true
-    GoXlrEnabled = $true
-    GoXlrClientPath = ""
-    Applications = @()
-}
-$audioMeterSettings = $null
+# Round-trip every existing key under Agent (Discord credentials, ScreenStream,
+# ScreenShareEnabledByDefault, AudioMeters, Capabilities, ...) rather than reconstructing the
+# file from an allowlist of known keys -- a previous version of this script only preserved
+# Capabilities and AudioMeters by name and silently dropped everything else (including Discord
+# credentials and ScreenShareEnabledByDefault) on every re-run.
+$agentSettings = [ordered]@{}
 if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
     $existingSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-    if ($null -ne $existingSettings.Agent -and
-        $null -ne $existingSettings.Agent.PSObject.Properties["Capabilities"] -and
-        $null -ne $existingSettings.Agent.Capabilities) {
-        $capabilitySettings = $existingSettings.Agent.Capabilities
+    if ($null -ne $existingSettings.Agent) {
+        foreach ($property in $existingSettings.Agent.PSObject.Properties) {
+            $agentSettings[$property.Name] = $property.Value
+        }
     }
-    if ($null -ne $existingSettings.Agent -and
-        $null -ne $existingSettings.Agent.PSObject.Properties["AudioMeters"] -and
-        $null -ne $existingSettings.Agent.AudioMeters) {
-        $audioMeterSettings = $existingSettings.Agent.AudioMeters
+}
+if (-not $agentSettings.Contains("Capabilities") -or $null -eq $agentSettings["Capabilities"]) {
+    $agentSettings["Capabilities"] = [ordered]@{
+        WindowsAudioEnabled = $true
+        GoXlrEnabled = $true
+        GoXlrClientPath = ""
+        Applications = @()
     }
 }
 
-$settings = [ordered]@{
-    Agent = [ordered]@{
-        BindAddress = $BindAddress
-        Port = $Port
-        CertificateThumbprint = $serverCertificate.Thumbprint
-        PairingCodeLifetimeSeconds = 120
-        MaximumPairingAttempts = 5
-        Capabilities = $capabilitySettings
-    }
-}
-if ($null -ne $audioMeterSettings) { $settings.Agent["AudioMeters"] = $audioMeterSettings }
+# These five are this script's actual job (they're derived from -BindAddress/-Port and the
+# certificate generated above); everything else round-trips from $agentSettings untouched.
+$agentSettings["BindAddress"] = $BindAddress
+$agentSettings["Port"] = $Port
+$agentSettings["CertificateThumbprint"] = $serverCertificate.Thumbprint
+$agentSettings["PairingCodeLifetimeSeconds"] = 120
+$agentSettings["MaximumPairingAttempts"] = 5
+
+$settings = [ordered]@{ Agent = $agentSettings }
 $settings | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
 if (-not $SkipFirewall) {
@@ -232,6 +245,49 @@ if (-not $SkipFirewall) {
         $addressFilter.RemoteAddress -notcontains "LocalSubnet" -or
         $interfaceFilter.InterfaceAlias -notcontains ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias))) {
         throw "The firewall rule exists but does not match the required local-only scope."
+    }
+
+    # Screen mirroring's WebRTC media path (ICE connectivity checks, then DTLS/SRTP for the
+    # actual video) is a separate UDP connection from the signaling WebSocket above, pinned
+    # in ScreenStreamWebSocketEndpoint.cs to this exact port range so the rule can stay this
+    # narrow. Without it, ICE connectivity checks from the client never reach the PC and the
+    # connection hangs in "checking" state until it times out.
+    $udpPortRange = "$IceUdpPortRangeStart-$IceUdpPortRangeEnd"
+    $udpRuleName = "Deck Windows Agent Local $BindAddress UDP $udpPortRange"
+    $existingUdpRules = @(Get-NetFirewallRule -DisplayName $udpRuleName -ErrorAction SilentlyContinue)
+    if ($existingUdpRules.Count -gt 1) {
+        throw "More than one firewall rule named '$udpRuleName' exists. Refusing to choose one automatically."
+    }
+    if ($existingUdpRules.Count -eq 0) {
+        New-NetFirewallRule `
+            -DisplayName $udpRuleName `
+            -Description "Deck Agent WebRTC media (ICE/DTLS/SRTP), limited to this private interface and local subnet." `
+            -Direction Inbound `
+            -Action Allow `
+            -Protocol UDP `
+            -LocalAddress $BindAddress `
+            -LocalPort $udpPortRange `
+            -RemoteAddress LocalSubnet `
+            -Profile Private `
+            -InterfaceAlias ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias)) `
+            -EdgeTraversalPolicy Block | Out-Null
+    }
+
+    $udpFirewallRule = Get-NetFirewallRule -DisplayName $udpRuleName -ErrorAction Stop
+    $udpPortFilter = $udpFirewallRule | Get-NetFirewallPortFilter
+    $udpAddressFilter = $udpFirewallRule | Get-NetFirewallAddressFilter
+    $udpInterfaceFilter = $udpFirewallRule | Get-NetFirewallInterfaceFilter
+    if ($udpFirewallRule.Enabled.ToString() -ne "True" -or
+        $udpFirewallRule.Direction.ToString() -ne "Inbound" -or
+        $udpFirewallRule.Action.ToString() -ne "Allow" -or
+        $udpFirewallRule.Profile.ToString() -ne "Private" -or
+        $udpFirewallRule.EdgeTraversalPolicy.ToString() -ne "Block" -or
+        $udpPortFilter.Protocol -ne "UDP" -or
+        $udpPortFilter.LocalPort -ne $udpPortRange -or
+        $udpAddressFilter.LocalAddress -notcontains $BindAddress -or
+        $udpAddressFilter.RemoteAddress -notcontains "LocalSubnet" -or
+        $udpInterfaceFilter.InterfaceAlias -notcontains ([System.Management.Automation.WildcardPattern]::Escape($bindInterfaceAlias))) {
+        throw "The UDP media firewall rule exists but does not match the required local-only scope."
     }
 }
 

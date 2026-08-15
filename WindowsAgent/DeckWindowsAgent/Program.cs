@@ -48,6 +48,7 @@ builder.Services.AddSingleton<AudioMeterService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<AudioMeterService>());
 builder.Services.AddSingleton<IScreenCaptureSourceFactory, WindowsGraphicsCaptureSourceFactory>();
 builder.Services.AddSingleton<VirtualDisplayDriverLocator>();
+builder.Services.AddSingleton<VirtualDisplayAttachment>();
 builder.Services.AddSingleton<ScreenStreamBroadcaster>();
 builder.Services.AddSingleton<ScreenStreamService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ScreenStreamService>());
@@ -192,8 +193,6 @@ app.MapScreenStreamWebSocket();
 app.MapDiscordWebSocket();
 
 app.Run();
-
-internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
 
 static bool TryAuthenticate(HttpContext context, PairingService pairing)
 {

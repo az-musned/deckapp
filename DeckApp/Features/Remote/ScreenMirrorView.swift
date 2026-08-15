@@ -5,6 +5,8 @@ import UIKit
 struct FullScreenScreenMirrorView: View {
     @Environment(\.dismiss) private var dismiss
     let store: ScreenMirrorStore
+    let remote: RemoteInputController
+    @State private var isDragging = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -38,13 +40,50 @@ struct FullScreenScreenMirrorView: View {
             Color.black
 
             if store.hasReceivedFrame, let videoTrack = store.videoTrack {
-                ScreenMirrorFrameView(videoTrack: videoTrack, contentMode: store.mode == .extend ? .scaleToFill : .scaleAspectFit)
+                // Extend used to force .scaleToFill, stretching the video to fill the frame
+                // whenever the virtual monitor's resolution didn't match the device's aspect
+                // ratio -- visibly distorted. .scaleAspectFit never distorts; the Windows Agent
+                // now also sets the virtual monitor to 1920x1080 on attach
+                // (VirtualDisplayAttachment.cs), which keeps the remaining letterboxing small
+                // on most iPads without needing the client to negotiate an exact match.
+                ScreenMirrorFrameView(videoTrack: videoTrack, contentMode: .scaleAspectFit)
+
+                // Touch-as-trackpad control over the PC while watching -- same relative-delta
+                // gesture surface used in the dedicated Remote tab (RemoteControlView.swift),
+                // reused here rather than rebuilt. Sits below the dismiss button/banners in the
+                // ZStack so they still receive their own taps.
+                RemoteTouchpadSurface(
+                    pointerMoved: { dx, dy in remote.enqueuePointer(deltaX: dx, deltaY: dy) },
+                    scrolled: { dx, dy in remote.enqueueScroll(deltaX: dx, deltaY: dy) },
+                    tapped: { remote.click(.left) },
+                    twoFingerTapped: {
+                        guard remote.preferences.twoFingerRightClick else { return }
+                        remote.click(.right)
+                    },
+                    dragChanged: { active in
+                        isDragging = active
+                        remote.setDrag(active: active)
+                    }
+                )
             } else {
                 statusOverlay
             }
 
             if store.hasReceivedFrame, store.isStale || store.connectionState != .connected {
                 staleBanner
+            }
+
+            if isDragging {
+                VStack {
+                    Spacer()
+                    Text("Dragging")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, DesignToken.Spacing.medium)
+                        .padding(.vertical, DesignToken.Spacing.small)
+                        .glassSurface(.elevated, cornerRadius: DesignToken.Radius.control)
+                        .padding(.bottom, DesignToken.Spacing.large)
+                }
+                .allowsHitTesting(false)
             }
 
             // TEMPORARY: diagnosing the "connects but renders ~1fps" report -- see

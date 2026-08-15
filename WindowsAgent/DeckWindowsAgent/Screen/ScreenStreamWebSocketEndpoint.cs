@@ -5,6 +5,7 @@ using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen.Models;
 using DeckWindowsAgent.Security;
 using SIPSorcery.Net;
+using SIPSorcery.Sys;
 using SIPSorceryMedia.Abstractions;
 
 namespace DeckWindowsAgent.Screen;
@@ -59,7 +60,16 @@ public static class ScreenStreamWebSocketEndpoint
         using (subscription)
         using (var socket = await context.WebSockets.AcceptWebSocketAsync())
         using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted))
-        using (var pc = new RTCPeerConnection(new RTCConfiguration { iceServers = [] }))
+        // Pinning ICE/RTP to a narrow, fixed UDP port range (rather than SIPSorcery's default
+        // OS-ephemeral-port choice per connection) is what makes it possible for
+        // Configure-LocalConnection.ps1 to open a tightly scoped firewall rule for the media
+        // path at all -- see ScreenStreamOptions.IceUdpPortRangeStart/End. bindPort 0 lets
+        // SIPSorcery pick the specific port within that range itself.
+        using (var pc = new RTCPeerConnection(
+            new RTCConfiguration { iceServers = [] },
+            bindPort: 0,
+            portRange: new PortRange(options.ScreenStream.IceUdpPortRangeStart, options.ScreenStream.IceUdpPortRangeEnd, false, null),
+            videoAsPrimary: true))
         {
             var sendGate = new SemaphoreSlim(1, 1);
             logger.LogInformation("Authenticated screen mirror client connected in {Mode} mode.", mode);
