@@ -21,7 +21,7 @@ struct DashboardCard<Content: View>: View {
             content
         }
         .padding(DesignToken.Spacing.medium)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
             RoundedRectangle(cornerRadius: DesignToken.Radius.card, style: .continuous)
                 .fill(DesignToken.Color.card)

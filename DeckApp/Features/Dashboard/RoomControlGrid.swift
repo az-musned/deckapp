@@ -18,6 +18,7 @@ struct RoomControlGrid: View {
                             .frame(
                                 maxWidth: .infinity,
                                 minHeight: minimumHeight(for: placement.widget),
+                                maxHeight: .infinity,
                                 alignment: .topLeading
                             )
                     }
