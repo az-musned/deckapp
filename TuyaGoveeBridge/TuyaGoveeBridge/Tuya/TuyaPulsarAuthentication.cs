@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using DotPulsar.Abstractions;
 
-namespace DeckWindowsAgent.Tuya;
+namespace TuyaGoveeBridge.Tuya;
 
 /// Implements Tuya's custom Pulsar SASL mechanism ("auth1"), a direct port of the password
 /// derivation and payload shape from Tuya's own reference client

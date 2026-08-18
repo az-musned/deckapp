@@ -1,6 +1,9 @@
 .DS_Store
 WindowsAgent/**/bin/
 WindowsAgent/**/obj/
+TuyaGoveeBridge/**/bin/
+TuyaGoveeBridge/**/obj/
+TuyaGoveeBridge/**/publish/
 DerivedData/
 *.xcuserstate
 xcuserdata/
@@ -14,6 +17,8 @@ xcuserdata/
 !DeckApp/Supporting/DeckAgent-Local-Root.cer
 WindowsAgent/**/appsettings.Development.json
 WindowsAgent/**/appsettings.Local.json
+TuyaGoveeBridge/**/appsettings.Development.json
+TuyaGoveeBridge/**/appsettings.Local.json
 research/gree-poc/gree_cloud_credentials.json
 research/gree-poc/gree_cloud_device.json
 research/gree-poc/.venv/

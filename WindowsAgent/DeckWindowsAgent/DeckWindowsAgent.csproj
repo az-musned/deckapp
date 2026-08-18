@@ -12,7 +12,6 @@
     <InternalsVisibleTo Include="DeckWindowsAgent.Validation" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="DotPulsar" Version="3.4.0" />
     <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
     <PackageReference Include="SIPSorcery" Version="10.0.15" />
     <PackageReference Include="SkiaSharp" Version="3.116.1" />

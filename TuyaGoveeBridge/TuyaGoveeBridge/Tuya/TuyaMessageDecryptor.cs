@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace DeckWindowsAgent.Tuya;
+namespace TuyaGoveeBridge.Tuya;
 
 /// Decrypts a Pulsar message body from Tuya's message service. Port of
 /// github.com/tuya/tuya-pulsar-sdk-dotnet/blob/main/AesUtil.cs, using System.Text.Json instead

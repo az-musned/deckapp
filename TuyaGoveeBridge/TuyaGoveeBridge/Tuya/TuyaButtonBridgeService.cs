@@ -1,18 +1,17 @@
 using System.Buffers;
 using System.Text.Json;
-using DeckWindowsAgent.Configuration;
-using DeckWindowsAgent.Govee;
 using DotPulsar;
 using DotPulsar.Abstractions;
 using DotPulsar.Extensions;
+using TuyaGoveeBridge.Configuration;
+using TuyaGoveeBridge.Govee;
 
-namespace DeckWindowsAgent.Tuya;
+namespace TuyaGoveeBridge.Tuya;
 
 /// Subscribes to Tuya's message service for the configured Zigbee button devices and turns the
-/// mapped Govee light on/off when a press comes in. Runs for the Agent's whole lifetime,
-/// independent of whether the phone app is open -- that's the entire point: a physical button
-/// press is an event that can happen at any time, and only something always-on (this Agent, not
-/// the phone) can react to it reliably.
+/// mapped Govee light on/off when a press comes in. Runs for this service's whole lifetime,
+/// independent of any phone or PC -- that's the entire point: a physical button press is an
+/// event that can happen at any time, and only something always-on can react to it reliably.
 ///
 /// The exact Tuya device-property (DP) code and value that mean "pressed" for this specific
 /// button model aren't known yet -- every status message received for a configured device ID is
@@ -21,29 +20,28 @@ namespace DeckWindowsAgent.Tuya;
 /// reports ongoing telemetry), so "a message arrived for this device" is a reasonable starting
 /// trigger; narrow this to a specific DP code/value once real press payloads are visible in the
 /// log, if it turns out something else on the device also produces a status message.
-public sealed class TuyaButtonAutomationService(
-    AgentOptions options,
+public sealed class TuyaButtonBridgeService(
+    BridgeOptions options,
     GoveeClient goveeClient,
-    ILogger<TuyaButtonAutomationService> logger) : BackgroundService
+    ILogger<TuyaButtonBridgeService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var configuration = options.TuyaButtons;
-        if (!configuration.IsConfigured)
+        if (!options.IsConfigured)
         {
-            logger.LogInformation("Tuya button automation is not configured (Agent:TuyaButtons); staying inactive.");
+            logger.LogInformation("Tuya button bridge is not configured (Bridge:* in appsettings.Local.json); staying inactive.");
             return;
         }
 
-        TuyaDataCenterExtensions.TryParse(configuration.DataCenter, out var dataCenter);
-        var buttonsByDeviceId = configuration.Buttons.ToDictionary(button => button.DeviceId, StringComparer.Ordinal);
+        TuyaDataCenterExtensions.TryParse(options.DataCenter, out var dataCenter);
+        var buttonsByDeviceId = options.Buttons.ToDictionary(button => button.DeviceId, StringComparer.Ordinal);
 
         var attempt = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await RunOnceAsync(configuration, dataCenter, buttonsByDeviceId, stoppingToken);
+                await RunOnceAsync(dataCenter, buttonsByDeviceId, stoppingToken);
                 attempt = 0;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -62,14 +60,13 @@ public sealed class TuyaButtonAutomationService(
     }
 
     private async Task RunOnceAsync(
-        TuyaButtonAutomationOptions configuration,
         TuyaDataCenter dataCenter,
-        Dictionary<string, TuyaButtonMapping> buttonsByDeviceId,
+        Dictionary<string, ButtonMapping> buttonsByDeviceId,
         CancellationToken stoppingToken)
     {
-        var topic = $"persistent://{configuration.AccessId}/out/event";
-        var subscriptionName = $"{configuration.AccessId}-sub";
-        IAuthentication authentication = new TuyaPulsarAuthentication(configuration.AccessId, configuration.AccessSecret);
+        var topic = $"persistent://{options.AccessId}/out/event";
+        var subscriptionName = $"{options.AccessId}-sub";
+        IAuthentication authentication = new TuyaPulsarAuthentication(options.AccessId, options.AccessSecret);
 
         await using var client = PulsarClient.Builder()
             .ServiceUrl(new Uri(dataCenter.PulsarServiceUrl()))
@@ -82,15 +79,15 @@ public sealed class TuyaButtonAutomationService(
             .SubscriptionType(SubscriptionType.Failover)
             .Create();
 
-        logger.LogInformation("Tuya button automation connected ({DataCenter}); watching {Count} device(s).", dataCenter, buttonsByDeviceId.Count);
+        logger.LogInformation("Tuya button bridge connected ({DataCenter}); watching {Count} device(s).", dataCenter, buttonsByDeviceId.Count);
 
         await foreach (var message in consumer.Messages(stoppingToken))
         {
             try
             {
                 message.Properties.TryGetValue("em", out var encryptionMode);
-                var decrypted = TuyaMessageDecryptor.Decrypt(encryptionMode, message.Data.ToArray(), configuration.AccessSecret);
-                await HandleDecryptedMessageAsync(decrypted, buttonsByDeviceId, configuration.GoveeApiKey, stoppingToken);
+                var decrypted = TuyaMessageDecryptor.Decrypt(encryptionMode, message.Data.ToArray(), options.AccessSecret);
+                await HandleDecryptedMessageAsync(decrypted, buttonsByDeviceId, options.GoveeApiKey, stoppingToken);
             }
             catch (Exception error)
             {
@@ -102,7 +99,7 @@ public sealed class TuyaButtonAutomationService(
 
     private async Task HandleDecryptedMessageAsync(
         string decrypted,
-        Dictionary<string, TuyaButtonMapping> buttonsByDeviceId,
+        Dictionary<string, ButtonMapping> buttonsByDeviceId,
         string goveeApiKey,
         CancellationToken cancellationToken)
     {

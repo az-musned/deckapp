@@ -4,7 +4,6 @@ using DeckWindowsAgent.Audio;
 using DeckWindowsAgent.Capabilities;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Discord;
-using DeckWindowsAgent.Govee;
 using DeckWindowsAgent.Input;
 using DeckWindowsAgent.Power;
 using DeckWindowsAgent.Protocol;
@@ -12,7 +11,6 @@ using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen;
 using DeckWindowsAgent.Security;
 using DeckWindowsAgent.Transport;
-using DeckWindowsAgent.Tuya;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
@@ -61,8 +59,6 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton(new DiscordTokenStore(Path.Combine(dataDirectory, "discord-token.json")));
 builder.Services.AddSingleton<DiscordBridgeService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBridgeService>());
-builder.Services.AddSingleton<GoveeClient>();
-builder.Services.AddHostedService<TuyaButtonAutomationService>();
 
 var app = builder.Build();
 app.UseWebSockets(new WebSocketOptions

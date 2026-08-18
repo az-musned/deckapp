@@ -1,4 +1,4 @@
-namespace DeckWindowsAgent.Tuya;
+namespace TuyaGoveeBridge.Tuya;
 
 /// Mirrors the regions in the iOS app's TuyaDataCenter (DeckApp/Models/TuyaModels.swift) so the
 /// same region name can be configured in both places -- keep them in sync if a region is added.

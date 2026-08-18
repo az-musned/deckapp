@@ -1,0 +1,12 @@
+{
+  "Bridge": {
+    "AccessId": "your-tuya-access-id",
+    "AccessSecret": "your-tuya-access-secret",
+    "DataCenter": "centralEurope",
+    "GoveeApiKey": "your-govee-api-key",
+    "Buttons": [
+      { "DeviceId": "first-button-device-id", "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:11", "Action": "toggle" },
+      { "DeviceId": "second-button-device-id", "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:22", "Action": "toggle" }
+    ]
+  }
+}

@@ -1,10 +1,10 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 
-namespace DeckWindowsAgent.Govee;
+namespace TuyaGoveeBridge.Govee;
 
 /// Minimal Govee cloud client, mirroring the shape (and exact request bodies) of the iOS app's
-/// GoveeClient.swift -- just enough to turn a light on/off from the Agent, for the Tuya button
+/// GoveeClient.swift -- just enough to turn a light on/off from the bridge, for the Tuya button
 /// automation. Not a full port: no device discovery or state polling beyond what toggling needs.
 public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<GoveeClient> logger)
 {
