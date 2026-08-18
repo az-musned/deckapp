@@ -189,6 +189,36 @@ actor FailoverWindowsAgentService: WindowsRemoteInputServing {
         throw lastError
     }
 
+    func scheduleSleep(afterSeconds seconds: Int) async throws {
+        var lastError: Error = WindowsRemoteInputError.disconnected
+        for index in preferredIndices {
+            do {
+                try await clients[index].scheduleSleep(afterSeconds: seconds)
+                activeIndex = index
+                return
+            } catch {
+                lastError = error
+                if !Self.canFailOver(after: error) { throw error }
+            }
+        }
+        throw lastError
+    }
+
+    func cancelScheduledSleep() async throws {
+        var lastError: Error = WindowsRemoteInputError.disconnected
+        for index in preferredIndices {
+            do {
+                try await clients[index].cancelScheduledSleep()
+                activeIndex = index
+                return
+            } catch {
+                lastError = error
+                if !Self.canFailOver(after: error) { throw error }
+            }
+        }
+        throw lastError
+    }
+
     func shutdown() async throws {
         var lastError: Error = WindowsRemoteInputError.disconnected
         for index in preferredIndices {

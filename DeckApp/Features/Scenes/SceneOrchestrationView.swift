@@ -71,12 +71,24 @@ struct SceneOrchestrationView: View {
                 .buttonStyle(.plain)
                 .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.destructive.opacity(0.16), interactive: true)
             } else {
-                Picker("Duration", selection: $timer.selectedDuration) {
-                    ForEach(SleepTimerDuration.allCases) { duration in
-                        Text(duration.title).tag(duration)
+                HStack {
+                    Text("\(timer.selectedMinutes) min")
+                        .font(.title3.weight(.semibold).monospacedDigit())
+                    Spacer()
+                    Stepper(
+                        "\(timer.selectedMinutes) minutes",
+                        value: $timer.selectedMinutes,
+                        in: SleepTimerController.minutesRange,
+                        step: 5
+                    )
+                    .labelsHidden()
+                }
+
+                HStack(spacing: DesignToken.Spacing.small) {
+                    ForEach(SleepTimerDuration.allCases) { preset in
+                        sleepTimerPresetButton(preset, timer: timer)
                     }
                 }
-                .pickerStyle(.segmented)
 
                 HStack(spacing: DesignToken.Spacing.small) {
                     ForEach(SleepTimerTarget.allCases) { target in
@@ -101,6 +113,21 @@ struct SceneOrchestrationView: View {
                 }
             }
         }
+    }
+
+    private func sleepTimerPresetButton(_ preset: SleepTimerDuration, timer: SleepTimerController) -> some View {
+        let isSelected = timer.selectedMinutes == preset.rawValue
+        return Button {
+            timer.selectedMinutes = preset.rawValue
+        } label: {
+            Text(preset.title)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? DesignToken.Color.accent : .primary)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: isSelected ? DesignToken.Color.accent.opacity(0.22) : nil, interactive: true)
     }
 
     private func sleepTimerTargetToggle(_ target: SleepTimerTarget, timer: SleepTimerController) -> some View {

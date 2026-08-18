@@ -24,6 +24,9 @@ enum SleepTimerTarget: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Quick-select presets shown alongside the custom minutes stepper -- not an exhaustive list of
+/// allowed durations the way this used to be a closed enum; any value in
+/// `SleepTimerController.minutesRange` is valid.
 enum SleepTimerDuration: Int, CaseIterable, Identifiable, Sendable {
     case fifteen = 15
     case thirty = 30

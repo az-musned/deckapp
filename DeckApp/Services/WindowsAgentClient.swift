@@ -74,6 +74,10 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
         let modifiers: Int
     }
 
+    private struct ScheduleSleepBody: Encodable {
+        let delaySeconds: Int
+    }
+
     private struct CapabilityCommandBody: Encodable {
         let command: String
         let id: String
@@ -288,6 +292,15 @@ actor WindowsAgentClient: WindowsRemoteInputServing {
 
     func shutdownPC() async throws {
         try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/shutdown", authenticated: true)
+    }
+
+    func scheduleSleep(afterSeconds seconds: Int) async throws {
+        let body = try JSONEncoder().encode(ScheduleSleepBody(delaySeconds: seconds))
+        try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/sleep/scheduled", body: body, authenticated: true)
+    }
+
+    func cancelScheduledSleep() async throws {
+        try await requestWithoutResponse(method: "POST", path: "/api/v1/agent/power/sleep/scheduled/cancel", authenticated: true)
     }
 
     func shutdown() async throws {

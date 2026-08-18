@@ -5,6 +5,7 @@ using DeckWindowsAgent.Capabilities;
 using DeckWindowsAgent.Configuration;
 using DeckWindowsAgent.Discord;
 using DeckWindowsAgent.Input;
+using DeckWindowsAgent.Power;
 using DeckWindowsAgent.Protocol;
 using DeckWindowsAgent.Safety;
 using DeckWindowsAgent.Screen;
@@ -35,6 +36,7 @@ builder.Services.AddSingleton(new PairingStore(Path.Combine(dataDirectory, "pair
 builder.Services.AddSingleton(new AudioChannelMappingStore(Path.Combine(dataDirectory, "audio-channel-mappings.json"), options));
 builder.Services.AddSingleton<PairingService>();
 builder.Services.AddSingleton(new AgentSafetyState(options.RemoteInputEnabledByDefault, options.ScreenShareEnabledByDefault));
+builder.Services.AddSingleton<ScheduledSleepService>();
 builder.Services.AddSingleton(new InputSessionRegistry(options.MaximumInputClients));
 builder.Services.AddSingleton<IWindowsInputSink, WindowsSendInputSink>();
 builder.Services.AddSingleton<IApplicationCapabilityService, ApplicationCapabilityService>();
@@ -186,6 +188,25 @@ app.MapPost("/api/v1/agent/power/shutdown", (HttpContext context, PairingService
     }
 });
 
+app.MapPost("/api/v1/agent/power/sleep/scheduled", (HttpContext context, ScheduleSleepRequest request, PairingService pairing, AgentSafetyState safety, ScheduledSleepService scheduledSleep) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    if (!safety.RemoteInputAllowed || safety.EmergencyInputDisabled)
+        return Results.Json(new { error = "Remote power control is unavailable." }, statusCode: StatusCodes.Status409Conflict);
+    if (request.DelaySeconds is < 1 or > 24 * 60 * 60)
+        return Results.BadRequest(new { error = "delaySeconds must be between 1 and 86400." });
+
+    scheduledSleep.Schedule(TimeSpan.FromSeconds(request.DelaySeconds));
+    return Results.Ok();
+});
+
+app.MapPost("/api/v1/agent/power/sleep/scheduled/cancel", (HttpContext context, PairingService pairing, ScheduledSleepService scheduledSleep) =>
+{
+    if (!TryAuthenticate(context, pairing)) return Results.Unauthorized();
+    var wasScheduled = scheduledSleep.Cancel();
+    return Results.Ok(new { wasScheduled });
+});
+
 app.MapInputWebSocket();
 app.MapAudioMeterEndpoints();
 app.MapAudioMeterWebSocket();
@@ -210,3 +231,4 @@ static string? BearerToken(HttpContext context)
 }
 
 internal sealed record HotkeyRequest(int KeyCode, int Modifiers);
+internal sealed record ScheduleSleepRequest(int DelaySeconds);

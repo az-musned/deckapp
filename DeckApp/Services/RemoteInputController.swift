@@ -205,6 +205,31 @@ final class RemoteInputController {
         }
     }
 
+    /// Asks the paired Windows Agent to sleep itself after `seconds` -- the Agent runs its own
+    /// timer, so unlike a countdown kept in the iOS app, this keeps firing reliably even if the
+    /// phone is locked, backgrounded, or closed entirely before the delay elapses.
+    @discardableResult
+    func scheduleSleep(afterSeconds seconds: Int) async -> Bool {
+        guard pairingState.isPaired else { return false }
+        do {
+            try await service.scheduleSleep(afterSeconds: seconds)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    func cancelScheduledSleep() async -> Bool {
+        guard pairingState.isPaired else { return false }
+        do {
+            try await service.cancelScheduledSleep()
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Sends a graceful shutdown command to the paired Windows Agent.
     func shutdownAgent() async throws {
         try await service.shutdown()
