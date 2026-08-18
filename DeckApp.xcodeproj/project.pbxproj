@@ -7,13 +7,43 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000000000000000000012 /* WebRTC in Frameworks */ = {
-			isa = PBXBuildFile;
-			productRef = A10000000000000000000011 /* WebRTC */;
-		};
-		A10000000000000000000017 /* CryptoSwift in Frameworks */ = { isa = PBXBuildFile; productRef = A10000000000000000000018 /* CryptoSwift */; };
-		A10000000000000000000019 /* CocoaMQTT in Frameworks */ = { isa = PBXBuildFile; productRef = A1000000000000000000001A /* CocoaMQTT */; };
+		5E0D61060B480E395005797C /* DeckAppLiveActivities.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		6025AB991BACCC5BC1D7ECE0 /* DeckAppLiveActivitiesBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABEF853B2B7D00F9443CBA2 /* DeckAppLiveActivitiesBundle.swift */; };
+		A10000000000000000000012 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000011 /* WebRTC */; };
+		A10000000000000000000017 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000018 /* CryptoSwift */; };
+		A10000000000000000000019 /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000001A /* CocoaMQTT */; };
+		A1085003CF52F72A1F62FD3D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2106FFD479A2F2F9B677A584 /* Foundation.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		59BC131EE878778B184D1022 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 40EEFEA79A2B4FD1248C7382;
+			remoteInfo = DeckAppLiveActivities;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		BA0F7B0901FB8886903D6D59 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				5E0D61060B480E395005797C /* DeckAppLiveActivities.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		2106FFD479A2F2F9B677A584 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DeckAppLiveActivities.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BABEF853B2B7D00F9443CBA2 /* DeckAppLiveActivitiesBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeckAppLiveActivitiesBundle.swift; path = DeckAppLiveActivitiesBundle.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		A10000000000000000000010 /* Exceptions for "DeckApp" folder in "DeckApp" target */ = {
@@ -37,6 +67,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9537B95EB0F4D2935FA23650 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1085003CF52F72A1F62FD3D /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -50,24 +88,69 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		08C6A206431D6829D30E2169 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C768F23C6049295481E3F098 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A10000000000000000000003 = {
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000001 /* DeckApp */,
 				A10000000000000000000004 /* Products */,
+				08C6A206431D6829D30E2169 /* Frameworks */,
+				AAEC463C609D49330B182AEE /* DeckAppLiveActivities */,
 			);
 			sourceTree = "<group>";
 		};
 		A10000000000000000000004 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AAEC463C609D49330B182AEE /* DeckAppLiveActivities */ = {
+			isa = PBXGroup;
+			children = (
+				BABEF853B2B7D00F9443CBA2 /* DeckAppLiveActivitiesBundle.swift */,
+			);
+			name = DeckAppLiveActivities;
+			path = DeckAppLiveActivities;
+			sourceTree = "<group>";
+		};
+		C768F23C6049295481E3F098 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				2106FFD479A2F2F9B677A584 /* Foundation.framework */,
+			);
+			name = iOS;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		40EEFEA79A2B4FD1248C7382 /* DeckAppLiveActivities */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9525E118424CEF124A7C0511 /* Build configuration list for PBXNativeTarget "DeckAppLiveActivities" */;
+			buildPhases = (
+				77EB775E7C78127C956C8C4C /* Sources */,
+				9537B95EB0F4D2935FA23650 /* Frameworks */,
+				83E65CA833E0DE6F22EBBA30 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DeckAppLiveActivities;
+			productName = DeckAppLiveActivities;
+			productReference = 9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		A10000000000000000000006 /* DeckApp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A10000000000000000000007 /* Build configuration list for PBXNativeTarget "DeckApp" */;
@@ -75,10 +158,12 @@
 				A10000000000000000000008 /* Sources */,
 				A10000000000000000000002 /* Frameworks */,
 				A10000000000000000000009 /* Resources */,
+				BA0F7B0901FB8886903D6D59 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				3459C50AAC39F7FC1F07E8C9 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000001 /* DeckApp */,
@@ -127,11 +212,19 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000006 /* DeckApp */,
+				40EEFEA79A2B4FD1248C7382 /* DeckAppLiveActivities */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		83E65CA833E0DE6F22EBBA30 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -142,6 +235,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		77EB775E7C78127C956C8C4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6025AB991BACCC5BC1D7ECE0 /* DeckAppLiveActivitiesBundle.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -151,7 +252,61 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		3459C50AAC39F7FC1F07E8C9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = DeckAppLiveActivities;
+			target = 40EEFEA79A2B4FD1248C7382 /* DeckAppLiveActivities */;
+			targetProxy = 59BC131EE878778B184D1022 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		099984E6516534F94E8C5441 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = DeckAppLiveActivities/DeckAppLiveActivities.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DZF7H8PH5P;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DeckAppLiveActivities/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.DeckApp.LiveActivities;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3FA98C57C9A906FD39DD7C3A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = DeckAppLiveActivities/DeckAppLiveActivities.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DZF7H8PH5P;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DeckAppLiveActivities/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.DeckApp.LiveActivities;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		A1000000000000000000000C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -192,6 +347,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_ENTITLEMENTS = DeckApp/Supporting/DeckApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DZF7H8PH5P;
@@ -227,6 +383,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_ENTITLEMENTS = DeckApp/Supporting/DeckApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DZF7H8PH5P;
@@ -260,6 +417,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		9525E118424CEF124A7C0511 /* Build configuration list for PBXNativeTarget "DeckAppLiveActivities" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3FA98C57C9A906FD39DD7C3A /* Release */,
+				099984E6516534F94E8C5441 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A10000000000000000000007 /* Build configuration list for PBXNativeTarget "DeckApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
