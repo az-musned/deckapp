@@ -883,7 +883,12 @@ private struct GreeClimateWidget: View {
     }
 
     private nonisolated static func temperatureText(_ value: Double) -> String {
-        String(format: "%.1f°", value)
+        // Cosmetic only: the AC itself is still actually set to 22.5. Mirrors
+        // ClimateView.temperatureLabel so the dashboard widget and the Climate tab agree.
+        let displayValue = value == 22.5 ? 22.4 : value
+        return displayValue.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f°", displayValue)
+            : String(format: "%.1f°", displayValue)
     }
 }
 
