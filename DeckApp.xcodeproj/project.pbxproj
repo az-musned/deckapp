@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5149627F3FCCCE640C4F2A32 /* LiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA832C39C1A46B54DC8F2ACB /* LiveActivityAttributes.swift */; };
 		5E0D61060B480E395005797C /* DeckAppLiveActivities.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		6025AB991BACCC5BC1D7ECE0 /* DeckAppLiveActivitiesBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABEF853B2B7D00F9443CBA2 /* DeckAppLiveActivitiesBundle.swift */; };
 		A10000000000000000000012 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000011 /* WebRTC */; };
 		A10000000000000000000017 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000018 /* CryptoSwift */; };
 		A10000000000000000000019 /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000001A /* CocoaMQTT */; };
 		A1085003CF52F72A1F62FD3D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2106FFD479A2F2F9B677A584 /* Foundation.framework */; };
+		DED129EB52F3E7BC8781C0C3 /* LiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA832C39C1A46B54DC8F2ACB /* LiveActivityAttributes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +44,7 @@
 /* Begin PBXFileReference section */
 		2106FFD479A2F2F9B677A584 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		9F358B3087C23145668D53DF /* DeckAppLiveActivities.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DeckAppLiveActivities.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BA832C39C1A46B54DC8F2ACB /* LiveActivityAttributes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveActivityAttributes.swift; sourceTree = "<group>"; };
 		BABEF853B2B7D00F9443CBA2 /* DeckAppLiveActivitiesBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeckAppLiveActivitiesBundle.swift; path = DeckAppLiveActivitiesBundle.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -103,6 +106,7 @@
 				A10000000000000000000004 /* Products */,
 				08C6A206431D6829D30E2169 /* Frameworks */,
 				AAEC463C609D49330B182AEE /* DeckAppLiveActivities */,
+				D5354C38FBDC82F750DF3FAC /* DeckAppShared */,
 			);
 			sourceTree = "<group>";
 		};
@@ -129,6 +133,15 @@
 				2106FFD479A2F2F9B677A584 /* Foundation.framework */,
 			);
 			name = iOS;
+			sourceTree = "<group>";
+		};
+		D5354C38FBDC82F750DF3FAC /* DeckAppShared */ = {
+			isa = PBXGroup;
+			children = (
+				BA832C39C1A46B54DC8F2ACB /* LiveActivityAttributes.swift */,
+			);
+			name = DeckAppShared;
+			path = DeckAppShared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -240,6 +253,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6025AB991BACCC5BC1D7ECE0 /* DeckAppLiveActivitiesBundle.swift in Sources */,
+				5149627F3FCCCE640C4F2A32 /* LiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -247,6 +261,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DED129EB52F3E7BC8781C0C3 /* LiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

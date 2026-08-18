@@ -42,6 +42,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>DeckApp discovers and controls your LG TV, Home Assistant, Bitfocus Companion, and paired Windows Control Agent on your private network.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
