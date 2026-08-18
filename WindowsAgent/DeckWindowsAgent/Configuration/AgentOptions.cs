@@ -22,6 +22,8 @@ public sealed class AgentOptions
     public string DiscordClientId { get; init; } = string.Empty;
     public string DiscordClientSecret { get; init; } = string.Empty;
 
+    public TuyaButtonAutomationOptions TuyaButtons { get; init; } = new();
+
     public void Validate()
     {
         var addresses = EffectiveBindAddresses;
@@ -51,6 +53,7 @@ public sealed class AgentOptions
         Capabilities.Validate();
         AudioMeters.Validate();
         ScreenStream.Validate();
+        TuyaButtons.Validate();
     }
 
     public IReadOnlyList<string> EffectiveBindAddresses => BindAddresses.Length > 0
@@ -193,4 +196,55 @@ public static class PrivateNetworkGuard
             || (bytes.Length == 16 && (bytes[0] & 0xFE) == 0xFC)
             || address.Equals(IPAddress.IPv6Loopback);
     }
+}
+
+/// <summary>Bridges Tuya Zigbee button presses to Govee light actions. Subscribes to Tuya's
+/// message service (Pulsar) for the configured button device IDs, entirely independent of the
+/// phone -- runs as long as this Agent does, so a button press works even if DeckApp is closed.
+/// Optional: when AccessId/AccessSecret/GoveeApiKey are blank or no buttons are configured, the
+/// background service logs that it's inactive and does nothing, same pattern as
+/// DiscordClientId/Secret above.</summary>
+public sealed class TuyaButtonAutomationOptions
+{
+    public string AccessId { get; init; } = string.Empty;
+    public string AccessSecret { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = "centralEurope";
+    public string GoveeApiKey { get; init; } = string.Empty;
+    public List<TuyaButtonMapping> Buttons { get; init; } = [];
+
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(AccessId) && !string.IsNullOrWhiteSpace(AccessSecret)
+        && !string.IsNullOrWhiteSpace(GoveeApiKey) && Buttons.Count > 0;
+
+    public void Validate()
+    {
+        if (!IsConfigured) return;
+
+        if (!DeckWindowsAgent.Tuya.TuyaDataCenterExtensions.TryParse(DataCenter, out _))
+            throw new InvalidOperationException($"Agent:TuyaButtons:DataCenter '{DataCenter}' is not a recognized Tuya data center.");
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var button in Buttons)
+        {
+            if (string.IsNullOrWhiteSpace(button.DeviceId))
+                throw new InvalidOperationException("Agent:TuyaButtons:Buttons entries need a DeviceId.");
+            if (!ids.Add(button.DeviceId))
+                throw new InvalidOperationException($"Duplicate Tuya button DeviceId '{button.DeviceId}'.");
+            if (string.IsNullOrWhiteSpace(button.GoveeSku) || string.IsNullOrWhiteSpace(button.GoveeDevice))
+                throw new InvalidOperationException($"Tuya button '{button.DeviceId}' needs a Govee Sku and Device.");
+            if (button.Action is not ("turnOn" or "turnOff" or "toggle"))
+                throw new InvalidOperationException($"Tuya button '{button.DeviceId}' Action must be turnOn, turnOff, or toggle.");
+        }
+    }
+}
+
+public sealed class TuyaButtonMapping
+{
+    public string DeviceId { get; init; } = string.Empty;
+    public string GoveeSku { get; init; } = string.Empty;
+    public string GoveeDevice { get; init; } = string.Empty;
+    /// turnOn, turnOff, or toggle. Defaults to toggle since a single scene-switch button is
+    /// often used as a plain on/off flip; set explicitly per button if each of your two buttons
+    /// is dedicated to one direction instead.
+    public string Action { get; init; } = "toggle";
 }
