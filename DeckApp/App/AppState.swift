@@ -615,7 +615,12 @@ final class AppState {
             if mockRoomControl.light.isOn { await toggleMockLight() }
             return
         }
-        guard mockRoomControl.light.isOn else { return }
+        // Unconditional, unlike the mock path above -- this is a real turn_off call to Home
+        // Assistant, which is idempotent (a no-op on HA's side if the light is already off),
+        // so there's no reason to trust mockRoomControl.light.isOn's possibly-stale local
+        // snapshot as a precondition. Guarding on it meant callers like the sleep timer could
+        // silently do nothing if that snapshot hadn't refreshed to match the light's real
+        // state (e.g. turned on by something other than this app since the last sync).
         await callMappedLightService(
             service: "turn_off",
             data: ["entity_id": .string(homeAssistantLightEntityID)],

@@ -227,7 +227,14 @@ final class LGTVStore {
     }
 
     func powerOff() async {
-        guard connectionState.isConnected else { return }
+        // Reconnect first rather than silently doing nothing -- callers like the sleep timer
+        // need this to actually reach the TV even if the connection dropped while nothing was
+        // actively using it (e.g. the app having been backgrounded a while), not only when a
+        // connection already happens to be live.
+        if !connectionState.isConnected {
+            await connect()
+            guard connectionState.isConnected else { return }
+        }
         await perform(LGTVRequests.powerOff, optimistic: { $0.isOn = false })
         disconnect()
     }
