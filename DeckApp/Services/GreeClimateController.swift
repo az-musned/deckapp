@@ -165,6 +165,16 @@ final class GreeClimateController {
             message: "Sending to the Gree cloud service…"
         )
         commandExecution = execution
+        // Applied immediately rather than waiting for the cloud round-trip (which can take
+        // several seconds) to confirm it. Without this, the displayed value -- which is also
+        // the base a +/- tap reads to compute its next target -- stayed stale until
+        // confirmation, so a second quick tap read the same pre-tap value and sent the same
+        // redundant target instead of advancing further; the number shown could also lag well
+        // behind whatever had actually just been sent. .pending flags it as not yet
+        // cloud-confirmed; the eventual push (mapState, in GreeCloudClimateClient) resolves it
+        // to .confirmed, or the timeout/failure paths below resolve it to .stale.
+        Self.applyOptimistically(command, to: &state)
+        state.confidence = .pending
         await Task.yield()
 
         execution.status = .running
@@ -178,9 +188,11 @@ final class GreeClimateController {
             execution.message = confirmed
                 ? "Confirmed by Gree."
                 : "Sent, but Gree did not report the change back in time."
+            if !confirmed { state.confidence = .stale }
         } catch {
             execution.status = .failed
             execution.message = error.localizedDescription
+            state.confidence = .stale
         }
         commandExecution = execution
     }
@@ -192,6 +204,26 @@ final class GreeClimateController {
             try? await Task.sleep(for: .milliseconds(300))
         }
         return Self.matches(state, command)
+    }
+
+    /// Mirrors the effect `GreeCloudClimateClient`'s protocol encoding will eventually produce
+    /// once the cloud confirms, so the optimistic value set here and the confirmed value that
+    /// later arrives agree (see the half-degree snapping in `matches` below, and the encoder in
+    /// GreeCloudClimateClient.optionsAndValues).
+    private nonisolated static func applyOptimistically(_ command: GreeClimateCommand, to state: inout GreeClimateState) {
+        switch command {
+        case .setPower(let isOn):
+            state.power = isOn
+        case .setTargetTemperature(let temperature):
+            state.targetTemperature = (temperature * 2).rounded() / 2
+        case .setMode(let mode):
+            state.hvacMode = mode
+        case .setFanMode(let fan):
+            state.fanMode = fan
+        case .setSwing(let vertical, let horizontal):
+            if let vertical { state.verticalSwing = vertical }
+            if let horizontal { state.horizontalSwing = horizontal }
+        }
     }
 
     private nonisolated static func matches(_ state: GreeClimateState, _ command: GreeClimateCommand) -> Bool {

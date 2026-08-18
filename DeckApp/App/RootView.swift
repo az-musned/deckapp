@@ -57,6 +57,11 @@ struct RootView: View {
                 appState.lgTV.setAppActive(phase == .active)
                 if phase == .active { await appState.connectCompanionIfConfigured() }
                 if phase == .active { await appState.remoteInput.autoConnectIfNeeded() }
+                // Previously only activated when ClimateView itself appeared, so the dashboard
+                // widget stayed on mock data for anyone who hadn't opened the Climate tab yet
+                // this session. Activating here instead means it reflects real Gree state as
+                // soon as the app is active, same as the other integrations on this line.
+                if phase == .active { await appState.greeClimate.activate() }
                 if phase != .active { await appState.remoteInput.pauseForUnsafeState() }
                 if phase != .active { await appState.greeClimate.deactivate() }
             }

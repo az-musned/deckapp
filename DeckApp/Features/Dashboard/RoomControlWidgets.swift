@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RoomControlWidgetView: View {
+    @Environment(AppState.self) private var appState
     let definition: RoomWidgetDefinition
     let compact: Bool
 
@@ -16,7 +17,15 @@ struct RoomControlWidgetView: View {
                 MockLightWidget(definition: definition)
             }
         case .climate:
-            MockClimateWidget(definition: definition, compact: compact)
+            // Runtime-detected rather than a definition.backend.backend choice (unlike
+            // Govee/LG TV below) since the Gree integration is a single account-wide sign-in,
+            // not a per-widget entity mapping -- if the user has a Gree device selected, this
+            // widget always represents it.
+            if appState.greeClimate.selectedDevice != nil {
+                GreeClimateWidget(definition: definition)
+            } else {
+                MockClimateWidget(definition: definition, compact: compact)
+            }
         case .television:
             if definition.backend.backend == .lgWebOS {
                 LGTVWidget(definition: definition, compact: compact)
@@ -190,6 +199,11 @@ private struct CompanionActionsWidget: View {
 private struct WidgetHeader: View {
     let definition: RoomWidgetDefinition
     let availability: DeviceAvailability
+    /// Overrides the badge normally derived from `definition.backend.backend` -- for backends
+    /// that aren't a persisted, user-configured choice on the widget definition itself (e.g.
+    /// the Gree climate widget, which detects and prefers a signed-in Gree device at runtime
+    /// rather than through the Dashboard layout editor's backend picker).
+    var badgeOverride: String? = nil
 
     var body: some View {
         if definition.size == .small {
@@ -204,7 +218,7 @@ private struct WidgetHeader: View {
                     Circle()
                         .fill(availability == .available ? DesignToken.Color.positive : Color.secondary)
                         .frame(width: 8, height: 8)
-                    Text(backendBadge)
+                    Text(badgeOverride ?? backendBadge)
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -236,7 +250,7 @@ private struct WidgetHeader: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(availability == .available ? DesignToken.Color.positive : .secondary)
                         .lineLimit(1)
-                    Text(backendBadge)
+                    Text(badgeOverride ?? backendBadge)
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -718,6 +732,158 @@ private struct MockLightWidget: View {
 
     private func supports(_ capability: DeviceCapabilityKind) -> Bool {
         definition.capabilities.contains { $0.kind == capability && $0.availability == .available }
+    }
+}
+
+/// Shown instead of `MockClimateWidget` whenever a Gree device is signed in and selected --
+/// detected at runtime (see `RoomControlWidgetView`) rather than through the Dashboard layout
+/// editor's backend picker, since the direct-cloud Gree integration is account-wide rather than
+/// a per-widget mapping the way Govee/LG TV/Home Assistant entities are. Reads and writes
+/// `appState.greeClimate` directly -- the same controller and state the dedicated Climate tab
+/// uses -- instead of the generic `mockRoomControl.climate` + Home Assistant path, which stayed
+/// pure local mock data for anyone using Gree's own cloud rather than routing climate through
+/// Home Assistant.
+private struct GreeClimateWidget: View {
+    @Environment(AppState.self) private var appState
+    let definition: RoomWidgetDefinition
+    // Buffers the slider's in-flight drag value so dragging doesn't send a network request per
+    // tick -- NumericControlRow's underlying Slider writes its binding continuously while
+    // dragging and only calls `commit` once, at drag end. Falls back to the confirmed/optimistic
+    // controller value whenever nothing is actively being dragged.
+    @State private var pendingTemperature: Double?
+
+    var body: some View {
+        let state = appState.greeClimate.state
+
+        DashboardCard {
+            WidgetHeader(definition: definition, availability: availability(state), badgeOverride: "GREE")
+
+            if definition.size == .small {
+                VStack(alignment: .leading, spacing: DesignToken.Spacing.xSmall) {
+                    Text(Self.temperatureText(state.targetTemperature))
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("Target · Current \(state.currentTemperature.map(Self.temperatureText) ?? "—")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: DesignToken.Spacing.small) {
+                        temperatureButton("minus") { adjustTemperature(by: -0.5) }
+                        temperatureButton("plus") { adjustTemperature(by: 0.5) }
+                    }
+                }
+            } else {
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(state.currentTemperature.map(Self.temperatureText) ?? "—")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("Current").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(Self.temperatureText(state.targetTemperature))
+                            .font(.system(size: 36, weight: .semibold, design: .rounded))
+                        Text("Target").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                NumericControlRow(
+                    title: "Temperature",
+                    value: Binding(
+                        get: { pendingTemperature ?? state.targetTemperature },
+                        set: { pendingTemperature = $0 }
+                    ),
+                    range: 16...30,
+                    step: 0.5,
+                    valueLabel: Self.temperatureText(pendingTemperature ?? state.targetTemperature),
+                    commit: {
+                        guard let pendingTemperature else { return }
+                        self.pendingTemperature = nil
+                        Task { await appState.greeClimate.setTargetTemperature(pendingTemperature) }
+                    }
+                )
+
+                if definition.size == .large || definition.size == .wide {
+                    ViewThatFits(in: .horizontal) {
+                        HStack { climateMenus(state) }
+                        VStack(alignment: .leading) { climateMenus(state) }
+                    }
+                } else {
+                    HStack { modeMenu(state) }
+                }
+            }
+        }
+    }
+
+    private func adjustTemperature(by delta: Double) {
+        let clamped = min(30, max(16, appState.greeClimate.state.targetTemperature + delta))
+        Task { await appState.greeClimate.setTargetTemperature(clamped) }
+    }
+
+    private func temperatureButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button {
+            RemoteHaptics.heavy()
+            action()
+        } label: {
+            Image(systemName: symbol)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, tint: DesignToken.Color.cyan.opacity(0.14), interactive: true)
+    }
+
+    @ViewBuilder
+    private func climateMenus(_ state: GreeClimateState) -> some View {
+        modeMenu(state)
+        pickerMenu("Fan", value: state.fanMode.title, options: GreeFanSpeed.allCases, optionTitle: { $0.title }) { fan in
+            Task { await appState.greeClimate.setFanMode(fan) }
+        }
+        pickerMenu("Swing", value: state.verticalSwing.title, options: GreeSwingPosition.allCases, optionTitle: { $0.title }) { swing in
+            Task { await appState.greeClimate.setSwing(vertical: swing) }
+        }
+    }
+
+    private func modeMenu(_ state: GreeClimateState) -> some View {
+        pickerMenu("Mode", value: state.hvacMode.title, options: GreeHVACMode.allCases, optionTitle: { $0.title }) { mode in
+            Task { await appState.greeClimate.setMode(mode) }
+        }
+    }
+
+    private func pickerMenu<Option: Identifiable>(
+        _ title: String,
+        value: String,
+        options: [Option],
+        optionTitle: @escaping (Option) -> String = { "\($0)" },
+        set: @escaping (Option) -> Void
+    ) -> some View {
+        Menu {
+            ForEach(options) { option in
+                Button(optionTitle(option)) {
+                    RemoteHaptics.heavy()
+                    set(option)
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.caption2).foregroundStyle(.secondary)
+                Text(value).font(.caption.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(DesignToken.Spacing.small)
+        }
+        .buttonStyle(.plain)
+        .glassSurface(.interactive, cornerRadius: DesignToken.Radius.control, interactive: true)
+    }
+
+    private func availability(_ state: GreeClimateState) -> DeviceAvailability {
+        switch state.availability {
+        case .reachable: .available
+        case .unreachable: .unavailable
+        case .unknown: .unknown
+        }
+    }
+
+    private nonisolated static func temperatureText(_ value: Double) -> String {
+        String(format: "%.1f°", value)
     }
 }
 
