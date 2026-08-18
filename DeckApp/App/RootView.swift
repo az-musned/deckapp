@@ -5,6 +5,11 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @State private var isSidebarCollapsed = false
+    // Drives re-presenting the full-screen view when the floating bubble is tapped. Set from
+    // the bubble's onExpand rather than reusing whatever local @State originally presented it
+    // (RoomControlWidgets' widgets own their own booleans, not reachable from here) -- this
+    // fullScreenCover is RootView's own, independent presentation of the same store.
+    @State private var reexpandedMirrorStore: ScreenMirrorStore?
 
     var body: some View {
         GeometryReader { proxy in
@@ -18,6 +23,25 @@ struct RootView: View {
                     phoneLayout(width: proxy.size.width)
                         .ignoresSafeArea(.container, edges: [.top, .bottom])
                 }
+
+                if let minimized = appState.remoteInput.minimizedMirror {
+                    FloatingScreenMirrorBubble(
+                        store: minimized,
+                        onExpand: { reexpandedMirrorStore = minimized },
+                        onClose: {
+                            appState.remoteInput.minimizedMirror = nil
+                            Task { await minimized.stopMirroring() }
+                        }
+                    )
+                }
+            }
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { reexpandedMirrorStore != nil },
+            set: { if !$0 { reexpandedMirrorStore = nil } }
+        )) {
+            if let reexpandedMirrorStore {
+                FullScreenScreenMirrorView(store: reexpandedMirrorStore, remote: appState.remoteInput)
             }
         }
         .task {

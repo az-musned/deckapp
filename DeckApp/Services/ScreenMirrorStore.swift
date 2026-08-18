@@ -1,6 +1,29 @@
 import Foundation
 import Observation
+import UIKit
 @preconcurrency import WebRTC
+
+/// Keeps the screen locked open for as long as at least one screen-mirror session (Mirror or
+/// Extend) is being watched -- otherwise the iPad/iPhone auto-locks mid-session the same way it
+/// would during any other period of no touches, even though the user is actively watching the
+/// PC's screen the whole time. Ref-counted rather than a plain bool on `ScreenMirrorStore`
+/// itself since Mirror and Extend are separate store instances; without shared ref-counting,
+/// one session ending could re-enable the idle timer out from under another still-active one.
+@MainActor
+private enum ScreenMirrorIdleTimerLock {
+    private static var holders = 0
+
+    static func acquire() {
+        holders += 1
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    static func release() {
+        holders = max(0, holders - 1)
+        guard holders == 0 else { return }
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+}
 
 @MainActor
 @Observable
@@ -37,12 +60,14 @@ final class ScreenMirrorStore {
 
     func startMirroring() async {
         consumers += 1
+        if consumers == 1 { ScreenMirrorIdleTimerLock.acquire() }
         guard consumers == 1, appIsActive else { return }
         await connect()
     }
 
     func stopMirroring() async {
         consumers = max(0, consumers - 1)
+        if consumers == 0 { ScreenMirrorIdleTimerLock.release() }
         guard consumers == 0 else { return }
         await stopTransport()
     }

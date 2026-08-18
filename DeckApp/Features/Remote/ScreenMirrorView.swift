@@ -8,6 +8,9 @@ struct FullScreenScreenMirrorView: View {
     let remote: RemoteInputController
     @State private var isDragging = false
     @State private var videoSize = CGSize.zero
+    // Set right before dismiss() when the user taps minimize (not close), so onDisappear below
+    // knows to leave the connection running for the floating bubble rather than tearing it down.
+    @State private var isMinimizing = false
     // Both touch surfaces below are full-screen UIViewRepresentables handling their own raw
     // UIKit touch/gesture dispatch, and relying on them to correctly defer to a SwiftUI Button
     // layered on top (via a hit-test delegate/override checking the button's measured frame)
@@ -108,9 +111,18 @@ struct FullScreenScreenMirrorView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .task {
-            await store.startMirroring()
+            // Resuming a session that's already running in the background because it was
+            // minimized -- it already holds a consumer token from before, so don't acquire a
+            // second one (that would leave the token count one too high forever, since a
+            // matching stopMirroring() will only ever be called once on the way back out).
+            if remote.minimizedMirror === store {
+                remote.minimizedMirror = nil
+            } else {
+                await store.startMirroring()
+            }
         }
         .onDisappear {
+            guard !isMinimizing else { return }
             Task { await store.stopMirroring() }
         }
     }
@@ -141,12 +153,27 @@ struct FullScreenScreenMirrorView: View {
     }
 
     private var closeButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "xmark")
-                .frame(width: 42, height: 42)
+        HStack(spacing: DesignToken.Spacing.small) {
+            Button {
+                // Order matters: set both before dismiss() fires SwiftUI's teardown, since
+                // onDisappear reads isMinimizing synchronously once the dismissal completes.
+                remote.minimizedMirror = store
+                isMinimizing = true
+                dismiss()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.elevated, cornerRadius: 999)
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.elevated, cornerRadius: 999)
         }
-        .buttonStyle(.plain)
-        .glassSurface(.elevated, cornerRadius: 999)
         .padding()
     }
 
@@ -252,7 +279,7 @@ struct FullScreenScreenMirrorView: View {
 /// per-frame `CMSampleBuffer`s the app assembled itself. A `Coordinator` tracks which track
 /// is currently attached so `updateUIView`/`dismantleUIView` can detach cleanly if the track
 /// changes or the view goes away (`videoTrack.add`/`.remove` isn't reference-counted).
-private struct ScreenMirrorFrameView: UIViewRepresentable {
+struct ScreenMirrorFrameView: UIViewRepresentable {
     let videoTrack: RTCVideoTrack
     let contentMode: UIView.ContentMode
     var onSizeChange: ((CGSize) -> Void)? = nil
@@ -318,7 +345,7 @@ private struct ScreenMirrorFrameView: UIViewRepresentable {
 // frames. `onSizeChange` is assigned once right after construction, before the observer is
 // handed to WebRTC, and never mutated afterward, so reading it from an arbitrary thread here
 // is safe despite not being statically provable to the compiler.
-private final class VideoSizeObserver: NSObject, RTCVideoRenderer, @unchecked Sendable {
+final class VideoSizeObserver: NSObject, RTCVideoRenderer, @unchecked Sendable {
     nonisolated(unsafe) var onSizeChange: ((CGSize) -> Void)?
 
     nonisolated func setSize(_ size: CGSize) {

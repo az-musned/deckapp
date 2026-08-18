@@ -21,6 +21,12 @@ final class RemoteInputController {
     let goXLR = GoXLRStore()
     let screenMirror = ScreenMirrorStore(mode: .mirror)
     let extendDisplay = ScreenMirrorStore(mode: .extend)
+    /// Set while a screen-mirror session (Mirror or Extend) is minimized to the floating bubble
+    /// instead of shown full-screen -- the connection stays alive (see
+    /// `FullScreenScreenMirrorView`'s minimize handling) so RootView can render the bubble and
+    /// let the user resume it. Only one can be minimized at a time since the Agent only allows
+    /// one active mode at a time regardless.
+    var minimizedMirror: ScreenMirrorStore?
     let discord = DiscordStore()
     var usesMockAgent = true
     var windowsAgentConnectionMode = WindowsAgentConnectionMode.automatic
