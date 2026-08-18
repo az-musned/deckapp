@@ -41,6 +41,8 @@ final class AppState {
     var homeAssistantShutdownPCScriptEntityID: String
     var wakeOnLANConfiguration: WakeOnLANConfiguration
     var pcPowerShortcutName: String
+    var tuyaPlugConfiguration: TuyaPlugConfiguration
+    var tuyaAccessSecret: String
     var pcActionQueueTimeoutSeconds: Double
     var wakePCBeforeQueuedActions: Bool
     var favoriteSceneActionIDs: Set<String>
@@ -75,6 +77,8 @@ final class AppState {
     private let homeAssistantWebSocket = HomeAssistantWebSocketClient()
     private let networkPathObserver = NetworkPathObserver()
     private let pcWakeOnLANService: any PCWakeOnLANServing
+    private let tuyaCloudPlugService: any TuyaCloudPlugServing
+    private let tuyaKeychain = KeychainSecretStore(service: "com.example.DeckApp.tuya")
     private var activeHomeAssistantURL: URL?
     private var reconnectTask: Task<Void, Never>?
     private var pcReachabilityTask: Task<Void, Never>?
@@ -92,7 +96,8 @@ final class AppState {
         spotify: SpotifyStore = SpotifyStore(),
         homeAssistantService: any HomeAssistantServiceProtocol = HomeAssistantClient(),
         pcWakeOnLANService: any PCWakeOnLANServing = PCWakeOnLANService(),
-        pcPowerShortcutService: any PCPowerShortcutTriggering = PCPowerShortcutService()
+        pcPowerShortcutService: any PCPowerShortcutTriggering = PCPowerShortcutService(),
+        tuyaCloudPlugService: any TuyaCloudPlugServing = TuyaCloudPlugService()
     ) {
         self.dashboardService = dashboardService
         self.commandService = commandService
@@ -105,6 +110,7 @@ final class AppState {
         self.homeAssistantService = homeAssistantService
         self.pcWakeOnLANService = pcWakeOnLANService
         self.pcPowerShortcutService = pcPowerShortcutService
+        self.tuyaCloudPlugService = tuyaCloudPlugService
         homeAssistantConfiguration = (try? JSONDecoder().decode(HomeAssistantConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.configuration") ?? Data())) ?? HomeAssistantConfiguration()
         homeAssistantToken = (try? keychain.load(account: "long-lived-access-token")) ?? ""
         goveeAPIKey = (try? goveeKeychain.load(account: "api-key")) ?? ""
@@ -120,6 +126,8 @@ final class AppState {
         homeAssistantShutdownPCScriptEntityID = UserDefaults.standard.string(forKey: "homeAssistant.shutdownPCScriptEntityID") ?? ""
         wakeOnLANConfiguration = (try? JSONDecoder().decode(WakeOnLANConfiguration.self, from: UserDefaults.standard.data(forKey: "homeAssistant.wakeOnLAN") ?? Data())) ?? WakeOnLANConfiguration()
         pcPowerShortcutName = UserDefaults.standard.string(forKey: "pcPower.shortcutName") ?? ""
+        tuyaPlugConfiguration = (try? JSONDecoder().decode(TuyaPlugConfiguration.self, from: UserDefaults.standard.data(forKey: "pcPower.tuyaConfiguration") ?? Data())) ?? TuyaPlugConfiguration()
+        tuyaAccessSecret = (try? tuyaKeychain.load(account: "access-secret")) ?? ""
         pcActionQueueTimeoutSeconds = max(10, UserDefaults.standard.double(forKey: "pcAction.queueTimeoutSeconds"))
         if UserDefaults.standard.object(forKey: "pcAction.queueTimeoutSeconds") == nil { pcActionQueueTimeoutSeconds = 45 }
         wakePCBeforeQueuedActions = UserDefaults.standard.object(forKey: "pcAction.wakeBeforeQueuedActions") as? Bool ?? true
@@ -350,8 +358,13 @@ final class AppState {
         !pcPowerShortcutName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var hasConfiguredTuyaPlug: Bool {
+        tuyaPlugConfiguration.isConfigured && !tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var hasConfiguredPCWakeWorkflow: Bool {
-        hasConfiguredPCPowerShortcut
+        hasConfiguredTuyaPlug
+            || hasConfiguredPCPowerShortcut
             || wakeOnLANConfiguration.normalizedMACAddress != nil
             || (!homeAssistantPCOnlineSensorEntityID.isEmpty
                 && (!homeAssistantPCPowerEntityID.isEmpty || wakeOnLANConfiguration.normalizedMACAddress != nil))
@@ -470,6 +483,13 @@ final class AppState {
         UserDefaults.standard.set(pcActionQueueTimeoutSeconds, forKey: "pcAction.queueTimeoutSeconds")
         UserDefaults.standard.set(wakePCBeforeQueuedActions, forKey: "pcAction.wakeBeforeQueuedActions")
         UserDefaults.standard.set(pcPowerShortcutName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "pcPower.shortcutName")
+        if let data = try? JSONEncoder().encode(tuyaPlugConfiguration) { UserDefaults.standard.set(data, forKey: "pcPower.tuyaConfiguration") }
+        let trimmedSecret = tuyaAccessSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedSecret.isEmpty {
+            try? tuyaKeychain.delete(account: "access-secret")
+        } else {
+            try? tuyaKeychain.save(trimmedSecret, account: "access-secret")
+        }
     }
 
     func toggleSceneActionFavorite(_ entityID: String) {
@@ -757,7 +777,8 @@ final class AppState {
     }
 
     func startPCControl() async {
-        guard hasConfiguredPCPowerShortcut
+        guard hasConfiguredTuyaPlug
+                || hasConfiguredPCPowerShortcut
                 || wakeOnLANConfiguration.normalizedMACAddress != nil
                 || !homeAssistantPCPowerEntityID.isEmpty else {
             await startMockPC()
@@ -778,7 +799,7 @@ final class AppState {
     }
 
     private func refreshPCReachability() async {
-        guard hasConfiguredPCPowerShortcut || wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
+        guard hasConfiguredTuyaPlug || hasConfiguredPCPowerShortcut || wakeOnLANConfiguration.normalizedMACAddress != nil else { return }
         let reachable = await remoteInput.isAgentReachable()
         guard mockRoomControl.pcPower.backendReachable != reachable else { return }
         mockRoomControl.pcPower.backendReachable = reachable
@@ -798,7 +819,27 @@ final class AppState {
         var execution = CommandExecution(action: .mockControl(label), status: .queued, backendMessage: "Queued while the PC wakes…")
         pendingCommand = execution
 
-        if hasConfiguredPCPowerShortcut {
+        if hasConfiguredTuyaPlug {
+            do {
+                execution.status = .running
+                execution.backendMessage = "Turning on the smart plug via Tuya…"
+                pendingCommand = execution
+                mockRoomControl.pcPower.plugState = .turningOn
+                mockRoomControl.pcPower.pcState = .supplyingPower
+                try await tuyaCloudPlugService.turnOn(
+                    deviceID: tuyaPlugConfiguration.deviceID,
+                    accessID: tuyaPlugConfiguration.accessID,
+                    accessSecret: tuyaAccessSecret,
+                    dataCenter: tuyaPlugConfiguration.dataCenter
+                )
+                mockRoomControl.pcPower.plugState = .on
+            } catch {
+                execution.status = .failed
+                execution.backendMessage = "Failed to turn on the Tuya smart plug: \(error.localizedDescription)"
+                pendingCommand = execution
+                return false
+            }
+        } else if hasConfiguredPCPowerShortcut {
             do {
                 execution.status = .running
                 execution.backendMessage = "Running \(pcPowerShortcutName) to power on the PC…"

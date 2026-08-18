@@ -257,8 +257,14 @@ struct GoXLREndpointMappingView: View {
     }
 }
 
-#Preview("GoXLR levels") {
+#if DEBUG
+private func goXLRPreviewStore() -> GoXLRStore {
     let store = GoXLRStore()
     store.loadPreviewChannels()
-    return GoXLRMixerView(store: store)
+    return store
 }
+
+#Preview("GoXLR levels") {
+    GoXLRMixerView(store: goXLRPreviewStore())
+}
+#endif

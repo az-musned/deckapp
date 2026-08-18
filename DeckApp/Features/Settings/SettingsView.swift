@@ -411,7 +411,27 @@ struct SettingsView: View {
                 } header: {
                     Text("PC command behavior")
                 } footer: {
-                    Text("The power-on Shortcut below takes priority when configured; Wake-on-LAN is the fallback.")
+                    Text("Priority when more than one is configured: Tuya smart plug, then the power-on Shortcut, then Wake-on-LAN.")
+                }
+
+                Section {
+                    TextField("Access ID", text: tuyaAccessIDBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Access Secret", text: tuyaAccessSecretBinding)
+                    TextField("Device ID", text: tuyaDeviceIDBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Picker("Data center", selection: tuyaDataCenterBinding) {
+                        ForEach(TuyaDataCenter.allCases) { center in
+                            Text(center.title).tag(center)
+                        }
+                    }
+                    Button("Save Tuya Settings") { appState.savePCWakeConfiguration() }
+                } header: {
+                    Text("Tuya smart plug")
+                } footer: {
+                    Text("Turns the plug on directly via Tuya's cloud API -- the same account SmartLife uses -- without opening the Shortcuts or SmartLife apps. Works even when everything at home, including a PC-hosted Home Assistant, is unreachable. Get the Access ID/Secret from a Cloud Project on Tuya's IoT Platform (iot.tuya.com), linked to your SmartLife app account; the Device ID is listed under that project's linked devices.")
                 }
 
                 Section {
@@ -561,6 +581,22 @@ struct SettingsView: View {
 
     private var pcPowerShortcutNameBinding: Binding<String> {
         Binding(get: { appState.pcPowerShortcutName }, set: { appState.pcPowerShortcutName = $0 })
+    }
+
+    private var tuyaAccessIDBinding: Binding<String> {
+        Binding(get: { appState.tuyaPlugConfiguration.accessID }, set: { appState.tuyaPlugConfiguration.accessID = $0 })
+    }
+
+    private var tuyaAccessSecretBinding: Binding<String> {
+        Binding(get: { appState.tuyaAccessSecret }, set: { appState.tuyaAccessSecret = $0 })
+    }
+
+    private var tuyaDeviceIDBinding: Binding<String> {
+        Binding(get: { appState.tuyaPlugConfiguration.deviceID }, set: { appState.tuyaPlugConfiguration.deviceID = $0 })
+    }
+
+    private var tuyaDataCenterBinding: Binding<TuyaDataCenter> {
+        Binding(get: { appState.tuyaPlugConfiguration.dataCenter }, set: { appState.tuyaPlugConfiguration.dataCenter = $0 })
     }
 
     private var companionAddressBinding: Binding<String> {
