@@ -56,8 +56,7 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
             _ => !(await TryGetPowerStateAsync(targets[0].Sku, targets[0].Device, apiKey, cancellationToken) ?? false)
         };
 
-        foreach (var target in targets)
-            await SetOnOffAsync(target.Sku, target.Device, apiKey, powerOn, cancellationToken);
+        await Task.WhenAll(targets.Select(target => SetOnOffAsync(target.Sku, target.Device, apiKey, powerOn, cancellationToken)));
     }
 
     /// Reads a light's current on/off state -- exposed so callers coordinating several
@@ -100,8 +99,7 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         int lowPercent = 1, int highPercent = 100)
     {
         var target = dim ? lowPercent : highPercent;
-        foreach (var device in targets)
-            await SetBrightnessAsync(device.Sku, device.Device, apiKey, target, cancellationToken);
+        await Task.WhenAll(targets.Select(device => SetBrightnessAsync(device.Sku, device.Device, apiKey, target, cancellationToken)));
     }
 
     private Task SetOnOffAsync(string sku, string device, string apiKey, bool powerOn, CancellationToken cancellationToken) =>

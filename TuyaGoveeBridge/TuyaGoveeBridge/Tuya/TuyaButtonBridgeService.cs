@@ -154,10 +154,12 @@ public sealed class TuyaButtonBridgeService(
                 dim = (currentValue ?? 0) >= midpoint;
             }
 
+            var brightnessTasks = new List<Task>();
             if (goveeTargets.Count > 0)
-                await goveeClient.ApplyBrightnessDirectionAsync(dim, goveeTargets, options.GoveeApiKey, cancellationToken);
+                brightnessTasks.Add(goveeClient.ApplyBrightnessDirectionAsync(dim, goveeTargets, options.GoveeApiKey, cancellationToken));
             if (tuyaBrightnessTargets.Count > 0)
-                await tuyaLightClient.ApplyBrightnessDirectionAsync(dim, tuyaBrightnessTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
+                brightnessTasks.Add(tuyaLightClient.ApplyBrightnessDirectionAsync(dim, tuyaBrightnessTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken));
+            await Task.WhenAll(brightnessTasks);
             return;
         }
 
@@ -171,10 +173,12 @@ public sealed class TuyaButtonBridgeService(
             ? (await ResolveToggleDirectionAsync(goveeTargets, tuyaTargets, dataCenter, cancellationToken) ? "turnOff" : "turnOn")
             : action;
 
+        var applyTasks = new List<Task>();
         if (goveeTargets.Count > 0)
-            await goveeClient.ApplyAsync(resolvedAction, goveeTargets, options.GoveeApiKey, cancellationToken);
+            applyTasks.Add(goveeClient.ApplyAsync(resolvedAction, goveeTargets, options.GoveeApiKey, cancellationToken));
         if (tuyaTargets.Count > 0)
-            await tuyaLightClient.ApplyAsync(resolvedAction, tuyaTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
+            applyTasks.Add(tuyaLightClient.ApplyAsync(resolvedAction, tuyaTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken));
+        await Task.WhenAll(applyTasks);
     }
 
     /// Reads current power state from a single reference light -- prefers the first Govee

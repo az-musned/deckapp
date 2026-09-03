@@ -51,8 +51,7 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
             _ => !(await TryGetPowerStateAsync(targets[0].DeviceId, targets[0].PowerCode, dataCenter, accessId, accessSecret, cancellationToken) ?? false)
         };
 
-        foreach (var target in targets)
-            await SendCommandAsync(target.DeviceId, target.PowerCode, powerOn, dataCenter, accessId, accessSecret, cancellationToken);
+        await Task.WhenAll(targets.Select(target => SendCommandAsync(target.DeviceId, target.PowerCode, powerOn, dataCenter, accessId, accessSecret, cancellationToken)));
     }
 
     /// Reads a light's current on/off state -- exposed so callers coordinating several
@@ -99,11 +98,8 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         bool dim, IReadOnlyList<(string DeviceId, string BrightnessCode, int Low, int High)> targets,
         TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
     {
-        foreach (var target in targets)
-        {
-            var value = dim ? target.Low : target.High;
-            await SendBrightnessCommandAsync(target.DeviceId, target.BrightnessCode, value, dataCenter, accessId, accessSecret, cancellationToken);
-        }
+        await Task.WhenAll(targets.Select(target =>
+            SendBrightnessCommandAsync(target.DeviceId, target.BrightnessCode, dim ? target.Low : target.High, dataCenter, accessId, accessSecret, cancellationToken)));
     }
 
     private async Task SendBrightnessCommandAsync(
