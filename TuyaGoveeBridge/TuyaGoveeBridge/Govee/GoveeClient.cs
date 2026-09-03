@@ -11,6 +11,12 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
 {
     private static readonly Uri BaseUri = new("https://openapi.api.govee.com");
 
+    // Bounds every outgoing request so one slow/hung call to Govee can't stall the bridge's
+    // single-threaded button-press loop for the .NET default HttpClient timeout (100s) --
+    // observed in practice: a status read for one light hung long enough that every other
+    // button press appeared completely unresponsive until it finally gave up.
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
     public Task TurnOnAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
         SetOnOffAsync(sku, device, apiKey, powerOn: true, cancellationToken);
 
@@ -31,7 +37,8 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
     /// target's current state and then applied identically to every target -- each light
     /// toggling independently would let repeated presses drift them out of sync with each
     /// other, since they'd diverge the moment any one of them was already in a different state
-    /// than the rest.
+    /// than the rest. A failure on one target (including a timeout) is logged and skipped
+    /// rather than aborting the remaining targets.
     public async Task ApplyAsync(string action, IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken)
     {
         if (targets.Count == 0) return;
@@ -73,20 +80,27 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
 
     private async Task ControlAsync(string sku, string device, string apiKey, string type, string instance, int value, CancellationToken cancellationToken)
     {
-        using var client = httpClientFactory.CreateClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/control"));
-        request.Headers.Add("Govee-API-Key", apiKey);
-        request.Content = JsonContent.Create(new
+        try
         {
-            requestId = Guid.NewGuid().ToString(),
-            payload = new { sku, device, capability = new { type, instance, value } }
-        });
+            using var client = httpClientFactory.CreateClient();
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/control"));
+            request.Headers.Add("Govee-API-Key", apiKey);
+            request.Content = JsonContent.Create(new
+            {
+                requestId = Guid.NewGuid().ToString(),
+                payload = new { sku, device, capability = new { type, instance, value } }
+            });
 
-        using var response = await client.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+            using var response = await SendWithTimeoutAsync(client, request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning("Govee control request for {Device} ({Instance}) failed ({Status}): {Body}", device, instance, response.StatusCode, body);
+            }
+        }
+        catch (Exception error)
         {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            logger.LogWarning("Govee control request for {Device} ({Instance}) failed ({Status}): {Body}", device, instance, response.StatusCode, body);
+            logger.LogWarning(error, "Govee control request for {Device} ({Instance}) failed.", device, instance);
         }
     }
 
@@ -107,7 +121,7 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
             request.Headers.Add("Govee-API-Key", apiKey);
             request.Content = JsonContent.Create(new { requestId = Guid.NewGuid().ToString(), payload = new { sku, device } });
 
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await SendWithTimeoutAsync(client, request, cancellationToken);
             if (!response.IsSuccessStatusCode) return default;
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -128,5 +142,12 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
             logger.LogWarning("Govee state request for {Device} ({Instance}) failed: {Message}", device, instance, error.Message);
             return default;
         }
+    }
+
+    private static async Task<HttpResponseMessage> SendWithTimeoutAsync(HttpClient client, HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(RequestTimeout);
+        return await client.SendAsync(request, timeoutCts.Token);
     }
 }

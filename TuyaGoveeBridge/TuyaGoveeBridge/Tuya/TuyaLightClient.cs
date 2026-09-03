@@ -17,6 +17,12 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
     private DateTimeOffset _accessTokenExpiresAt = DateTimeOffset.MinValue;
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
 
+    // Bounds every outgoing request so one slow/hung call to Tuya can't stall the bridge's
+    // single-threaded button-press loop for the .NET default HttpClient timeout (100s) --
+    // observed live: a status read for one light hung long enough that every other button press
+    // appeared completely unresponsive until it finally gave up.
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
     public Task TurnOnAsync(string deviceId, string powerCode, TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken) =>
         SendCommandAsync(deviceId, powerCode, true, dataCenter, accessId, accessSecret, cancellationToken);
 
@@ -47,16 +53,23 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         string deviceId, string powerCode, bool powerOn,
         TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
     {
-        var body = JsonSerializer.Serialize(new
+        try
         {
-            commands = new[] { new { code = powerCode, value = powerOn } }
-        });
+            var body = JsonSerializer.Serialize(new
+            {
+                commands = new[] { new { code = powerCode, value = powerOn } }
+            });
 
-        var response = await SendSignedRequestAsync(HttpMethod.Post, $"/v1.0/devices/{deviceId}/commands", body, dataCenter, accessId, accessSecret, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+            var response = await SendSignedRequestAsync(HttpMethod.Post, $"/v1.0/devices/{deviceId}/commands", body, dataCenter, accessId, accessSecret, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning("Tuya command request for {DeviceId} failed ({Status}): {Body}", deviceId, response.StatusCode, responseBody);
+            }
+        }
+        catch (Exception error)
         {
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            logger.LogWarning("Tuya command request for {DeviceId} failed ({Status}): {Body}", deviceId, response.StatusCode, responseBody);
+            logger.LogWarning(error, "Tuya command request for {DeviceId} failed.", deviceId);
         }
     }
 
@@ -99,7 +112,7 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         ApplySignatureHeaders(request, path, body, accessId, accessSecret, accessToken);
-        return await client.SendAsync(request, cancellationToken);
+        return await SendWithTimeoutAsync(client, request, cancellationToken);
     }
 
     private async Task<string> GetAccessTokenAsync(TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
@@ -118,7 +131,7 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
             using var request = new HttpRequestMessage(HttpMethod.Get, dataCenter.RestApiHost() + path);
             ApplySignatureHeaders(request, path, null, accessId, accessSecret, accessToken: null);
 
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await SendWithTimeoutAsync(client, request, cancellationToken);
             response.EnsureSuccessStatusCode();
             var token = await response.Content.ReadFromJsonAsync<TuyaTokenResponse>(cancellationToken: cancellationToken)
                 ?? throw new InvalidOperationException("Tuya token response was empty.");
@@ -154,6 +167,13 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         request.Headers.Add("t", timestamp);
         request.Headers.Add("sign_method", "HMAC-SHA256");
         if (accessToken is not null) request.Headers.Add("access_token", accessToken);
+    }
+
+    private static async Task<HttpResponseMessage> SendWithTimeoutAsync(HttpClient client, HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(RequestTimeout);
+        return await client.SendAsync(request, timeoutCts.Token);
     }
 
     private static string Sha256Hex(string value)
