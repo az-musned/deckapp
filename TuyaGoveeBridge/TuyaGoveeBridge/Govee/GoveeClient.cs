@@ -39,6 +39,12 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
     /// other, since they'd diverge the moment any one of them was already in a different state
     /// than the rest. A failure on one target (including a timeout) is logged and skipped
     /// rather than aborting the remaining targets.
+    ///
+    /// This only decides direction from Govee lights -- when a button also has non-Govee
+    /// targets (e.g. a Tuya-native light), call GetPowerStateAsync once against a single shared
+    /// reference light and pass the resolved "turnOn"/"turnOff" to every provider's Apply call
+    /// instead of "toggle", so they can't independently read different states and disagree on
+    /// which direction to go.
     public async Task ApplyAsync(string action, IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken)
     {
         if (targets.Count == 0) return;
@@ -53,6 +59,12 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         foreach (var target in targets)
             await SetOnOffAsync(target.Sku, target.Device, apiKey, powerOn, cancellationToken);
     }
+
+    /// Reads a light's current on/off state -- exposed so callers coordinating several
+    /// providers (Govee + Tuya-native) can decide one shared toggle direction from a single
+    /// reference light rather than letting each provider decide independently.
+    public Task<bool?> GetPowerStateAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
+        TryGetPowerStateAsync(sku, device, apiKey, cancellationToken);
 
     /// Flips every target between 1% and 100% brightness together (e.g. a button's long press),
     /// using the same "decide once from the first target, apply to all" approach as ApplyAsync

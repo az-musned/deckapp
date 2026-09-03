@@ -32,6 +32,12 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
     /// Applies one on/off action to several Tuya lights as a single group, mirroring
     /// GoveeClient.ApplyAsync -- "toggle" decides direction once from the first target's current
     /// state so repeated presses can't drift the lights out of sync with each other.
+    ///
+    /// This only decides direction from Tuya lights -- when a button also has Govee targets,
+    /// resolve the shared direction once (via GoveeClient.GetPowerStateAsync or this class's
+    /// GetPowerStateAsync against a single reference light) and pass the resolved
+    /// "turnOn"/"turnOff" here instead of "toggle", so the two providers can't independently
+    /// read different states and disagree on which direction to go.
     public async Task ApplyAsync(
         string action, IReadOnlyList<(string DeviceId, string PowerCode)> targets,
         TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
@@ -48,6 +54,12 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         foreach (var target in targets)
             await SendCommandAsync(target.DeviceId, target.PowerCode, powerOn, dataCenter, accessId, accessSecret, cancellationToken);
     }
+
+    /// Reads a light's current on/off state -- exposed so callers coordinating several
+    /// providers (Govee + Tuya-native) can decide one shared toggle direction from a single
+    /// reference light rather than letting each provider decide independently.
+    public Task<bool?> GetPowerStateAsync(string deviceId, string powerCode, TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken) =>
+        TryGetPowerStateAsync(deviceId, powerCode, dataCenter, accessId, accessSecret, cancellationToken);
 
     private async Task SendCommandAsync(
         string deviceId, string powerCode, bool powerOn,

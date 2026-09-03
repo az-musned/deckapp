@@ -124,22 +124,50 @@ public sealed class TuyaButtonBridgeService(
             return;
         }
 
-        if (button.Targets.Count > 0)
+        var goveeTargets = button.Targets.Select(target => (target.GoveeSku, target.GoveeDevice)).ToList();
+        var tuyaTargets = button.TuyaLightTargets.Select(target => (target.DeviceId, target.PowerCode)).ToList();
+
+        if (action == "toggleBrightness")
         {
-            var goveeTargets = button.Targets.Select(target => (target.GoveeSku, target.GoveeDevice)).ToList();
-            if (action == "toggleBrightness")
+            // Govee-only for now -- these Tuya lights' brightness DP and scale vary per device
+            // category and aren't wired up, so they're unaffected by this action.
+            if (goveeTargets.Count > 0)
                 await goveeClient.ApplyBrightnessToggleAsync(goveeTargets, options.GoveeApiKey, cancellationToken);
-            else
-                await goveeClient.ApplyAsync(action, goveeTargets, options.GoveeApiKey, cancellationToken);
+            return;
         }
 
-        // toggleBrightness only applies to Govee targets above -- these lights' brightness DP
-        // and scale vary per device/category and aren't wired up, so skip them for that action.
-        if (button.TuyaLightTargets.Count > 0 && action != "toggleBrightness")
-        {
-            var tuyaTargets = button.TuyaLightTargets.Select(target => (target.DeviceId, target.PowerCode)).ToList();
-            await tuyaLightClient.ApplyAsync(action, tuyaTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
-        }
+        // "toggle" must resolve to one shared direction before touching either provider: each
+        // provider's own ApplyAsync would otherwise read its own targets' current state
+        // independently, and if a Govee light and the Tuya light ever end up in different
+        // states (e.g. one missed an earlier command), that produces two different toggle
+        // decisions -- observed live as the Tuya light flipping the opposite way from the rest.
+        // turnOn/turnOff need no resolution since they're already an explicit direction.
+        var resolvedAction = action == "toggle"
+            ? (await ResolveToggleDirectionAsync(goveeTargets, tuyaTargets, dataCenter, cancellationToken) ? "turnOff" : "turnOn")
+            : action;
+
+        if (goveeTargets.Count > 0)
+            await goveeClient.ApplyAsync(resolvedAction, goveeTargets, options.GoveeApiKey, cancellationToken);
+        if (tuyaTargets.Count > 0)
+            await tuyaLightClient.ApplyAsync(resolvedAction, tuyaTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
+    }
+
+    /// Reads current power state from a single reference light -- prefers the first Govee
+    /// target if there is one, otherwise the first Tuya light -- so every target this button
+    /// controls moves the same direction together instead of each provider deciding from its
+    /// own (possibly out-of-sync) targets. Defaults to "was off" (so the resolved action turns
+    /// everything on) if the read fails, matching GoveeClient/TuyaLightClient's own fallback.
+    private async Task<bool> ResolveToggleDirectionAsync(
+        List<(string GoveeSku, string GoveeDevice)> goveeTargets,
+        List<(string DeviceId, string PowerCode)> tuyaTargets,
+        TuyaDataCenter dataCenter,
+        CancellationToken cancellationToken)
+    {
+        if (goveeTargets.Count > 0)
+            return await goveeClient.GetPowerStateAsync(goveeTargets[0].GoveeSku, goveeTargets[0].GoveeDevice, options.GoveeApiKey, cancellationToken) ?? false;
+        if (tuyaTargets.Count > 0)
+            return await tuyaLightClient.GetPowerStateAsync(tuyaTargets[0].DeviceId, tuyaTargets[0].PowerCode, dataCenter, options.AccessId, options.AccessSecret, cancellationToken) ?? false;
+        return false;
     }
 
     private static string? FindSwitchTypeValue(JsonElement bizData)
