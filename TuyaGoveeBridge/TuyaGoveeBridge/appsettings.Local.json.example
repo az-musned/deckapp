@@ -17,7 +17,7 @@
           { "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:22" }
         ],
         "TuyaLightTargets": [
-          { "DeviceId": "some-tuya-light-device-id", "PowerCode": "switch_led" }
+          { "DeviceId": "some-tuya-light-device-id", "PowerCode": "switch_led", "BrightnessCode": "bright_value", "BrightnessLow": 10, "BrightnessHigh": 1000 }
         ]
       },
       {

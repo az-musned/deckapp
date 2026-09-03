@@ -44,6 +44,8 @@ public sealed class BridgeOptions
                     throw new InvalidOperationException($"Tuya button '{button.DeviceId}' has a Tuya light target missing a DeviceId.");
                 if (string.IsNullOrWhiteSpace(target.PowerCode))
                     throw new InvalidOperationException($"Tuya button '{button.DeviceId}' Tuya light target '{target.DeviceId}' needs a PowerCode.");
+                if (!string.IsNullOrWhiteSpace(target.BrightnessCode) && target.BrightnessLow >= target.BrightnessHigh)
+                    throw new InvalidOperationException($"Tuya button '{button.DeviceId}' Tuya light target '{target.DeviceId}' needs BrightnessLow < BrightnessHigh.");
             }
             if (button.ClickActions.Count == 0)
                 throw new InvalidOperationException($"Tuya button '{button.DeviceId}' needs at least one entry in ClickActions.");
@@ -68,16 +70,18 @@ public sealed class ButtonMapping
     /// Tuya-native lights this button controls together, alongside (or instead of) the Govee
     /// Targets above -- a different cloud/API than Govee's, controlled via
     /// TuyaLightClient.ApplyAsync using the same Bridge:AccessId/AccessSecret/DataCenter as the
-    /// button subscription itself. Only turnOn/turnOff/toggle apply here (not
-    /// toggleBrightness -- these lights' brightness DP and scale vary per device/category and
-    /// aren't wired up yet).
+    /// button subscription itself.
     public List<TuyaLightTarget> TuyaLightTargets { get; init; } = [];
     /// Maps the button's click type (the value of its "switch_type_1" data point) to what to
-    /// do: turnOn, turnOff, toggle, or toggleBrightness (flips the Govee Targets between 1% and
-    /// 100% brightness together; TuyaLightTargets are unaffected by toggleBrightness). A click
-    /// type with no entry here is ignored. "single_click", "double_click", and "long_press" are
-    /// all confirmed live from this button model (matches Tuya's documented range for DP
-    /// switch_mode1/switch_type_1 on category "wxkg" scene switches: click/double_click/press).
+    /// do: turnOn, turnOff, toggle, or toggleBrightness. toggle/toggleBrightness resolve one
+    /// shared direction from a single reference light (preferring the first Govee target, else
+    /// the first Tuya target with a BrightnessCode set for toggleBrightness) and apply it to
+    /// every target across both providers, so they can't independently disagree on direction --
+    /// see TuyaButtonBridgeService.ResolveToggleDirectionAsync. A Tuya light with no
+    /// BrightnessCode set is unaffected by toggleBrightness. A click type with no entry here is
+    /// ignored. "single_click", "double_click", and "long_press" are all confirmed live from
+    /// this button model (matches Tuya's documented range for DP switch_mode1/switch_type_1 on
+    /// category "wxkg" scene switches: click/double_click/press).
     public Dictionary<string, string> ClickActions { get; init; } = new(StringComparer.OrdinalIgnoreCase)
     {
         ["single_click"] = "toggle"
@@ -97,4 +101,12 @@ public sealed class TuyaLightTarget
     /// category; check the device's specification (GET /v1.0/devices/{id}/specifications) if
     /// unsure.
     public string PowerCode { get; init; } = string.Empty;
+    /// The device's brightness data-point code, e.g. "bright_value" -- optional; leave unset for
+    /// a light with no brightness capability, or one not participating in toggleBrightness.
+    public string? BrightnessCode { get; init; }
+    /// This device's own brightness DP range (varies per category -- e.g. one confirmed live
+    /// example uses 10-1000, not a 0-100 percent scale like Govee's). Only meaningful when
+    /// BrightnessCode is set.
+    public int BrightnessLow { get; init; } = 1;
+    public int BrightnessHigh { get; init; } = 100;
 }

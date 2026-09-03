@@ -71,6 +71,11 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
     /// so the lights can't drift out of sync with each other across repeated presses. A light
     /// that's off stays off -- setting brightness doesn't turn a light on, matching how the
     /// physical dimmer on most lights behaves.
+    ///
+    /// This only decides direction from Govee lights -- when a button also has non-Govee
+    /// brightness targets, use GetBrightnessPercentAsync/ApplyBrightnessDirectionAsync instead
+    /// so the direction can be resolved once and shared with the other provider (mirrors
+    /// ApplyAsync's "toggle" split for the same reason).
     public async Task ApplyBrightnessToggleAsync(
         IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken,
         int lowPercent = 1, int highPercent = 100, int midpoint = 50)
@@ -78,8 +83,23 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         if (targets.Count == 0) return;
 
         var current = await TryGetBrightnessAsync(targets[0].Sku, targets[0].Device, apiKey, cancellationToken);
-        var target = (current ?? 0) >= midpoint ? lowPercent : highPercent;
+        var dim = (current ?? 0) >= midpoint;
+        await ApplyBrightnessDirectionAsync(dim, targets, apiKey, cancellationToken, lowPercent, highPercent);
+    }
 
+    /// Reads a light's current brightness (0-100%) -- exposed for the same cross-provider
+    /// direction-resolution reason as GetPowerStateAsync.
+    public Task<int?> GetBrightnessPercentAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
+        TryGetBrightnessAsync(sku, device, apiKey, cancellationToken);
+
+    /// Sets every target to lowPercent (if dim) or highPercent (if not), with no state read of
+    /// its own -- the direction must already be decided by the caller. A light that's off stays
+    /// off, same as ApplyBrightnessToggleAsync.
+    public async Task ApplyBrightnessDirectionAsync(
+        bool dim, IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken,
+        int lowPercent = 1, int highPercent = 100)
+    {
+        var target = dim ? lowPercent : highPercent;
         foreach (var device in targets)
             await SetBrightnessAsync(device.Sku, device.Device, apiKey, target, cancellationToken);
     }

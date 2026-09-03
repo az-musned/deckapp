@@ -129,10 +129,35 @@ public sealed class TuyaButtonBridgeService(
 
         if (action == "toggleBrightness")
         {
-            // Govee-only for now -- these Tuya lights' brightness DP and scale vary per device
-            // category and aren't wired up, so they're unaffected by this action.
+            // Only Tuya targets with a BrightnessCode configured participate -- a light with no
+            // brightness capability, or one not wired up with its DP code/range, is skipped.
+            var tuyaBrightnessTargets = button.TuyaLightTargets
+                .Where(target => !string.IsNullOrWhiteSpace(target.BrightnessCode))
+                .Select(target => (target.DeviceId, BrightnessCode: target.BrightnessCode!, target.BrightnessLow, target.BrightnessHigh))
+                .ToList();
+            if (goveeTargets.Count == 0 && tuyaBrightnessTargets.Count == 0) return;
+
+            // Resolve one shared dim direction, same reasoning as the "toggle" resolution below:
+            // each provider reading its own current brightness independently could disagree
+            // about which direction to go.
+            bool dim;
             if (goveeTargets.Count > 0)
-                await goveeClient.ApplyBrightnessToggleAsync(goveeTargets, options.GoveeApiKey, cancellationToken);
+            {
+                var currentPercent = await goveeClient.GetBrightnessPercentAsync(goveeTargets[0].GoveeSku, goveeTargets[0].GoveeDevice, options.GoveeApiKey, cancellationToken);
+                dim = (currentPercent ?? 0) >= 50;
+            }
+            else
+            {
+                var reference = tuyaBrightnessTargets[0];
+                var currentValue = await tuyaLightClient.GetBrightnessAsync(reference.DeviceId, reference.BrightnessCode, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
+                var midpoint = (reference.BrightnessLow + reference.BrightnessHigh) / 2;
+                dim = (currentValue ?? 0) >= midpoint;
+            }
+
+            if (goveeTargets.Count > 0)
+                await goveeClient.ApplyBrightnessDirectionAsync(dim, goveeTargets, options.GoveeApiKey, cancellationToken);
+            if (tuyaBrightnessTargets.Count > 0)
+                await tuyaLightClient.ApplyBrightnessDirectionAsync(dim, tuyaBrightnessTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
             return;
         }
 

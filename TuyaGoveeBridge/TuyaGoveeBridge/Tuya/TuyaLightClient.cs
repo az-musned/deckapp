@@ -61,6 +61,75 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
     public Task<bool?> GetPowerStateAsync(string deviceId, string powerCode, TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken) =>
         TryGetPowerStateAsync(deviceId, powerCode, dataCenter, accessId, accessSecret, cancellationToken);
 
+    /// Reads a light's current raw brightness DP value -- exposed for the same cross-provider
+    /// direction-resolution reason as GetPowerStateAsync. The scale is whatever this specific
+    /// device's brightness DP uses (e.g. 10-1000), not a normalized percent.
+    public async Task<int?> GetBrightnessAsync(
+        string deviceId, string brightnessCode, TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await SendSignedRequestAsync(HttpMethod.Get, $"/v1.0/devices/{deviceId}/status", null, dataCenter, accessId, accessSecret, cancellationToken);
+            if (!response.IsSuccessStatusCode) return null;
+
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty("result", out var result)) return null;
+
+            foreach (var status in result.EnumerateArray())
+            {
+                if (status.GetProperty("code").GetString() != brightnessCode) continue;
+                var value = status.GetProperty("value");
+                return value.ValueKind == JsonValueKind.Number ? value.GetInt32() : null;
+            }
+            return null;
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning("Tuya brightness read for {DeviceId} failed: {Message}", deviceId, error.Message);
+            return null;
+        }
+    }
+
+    /// Sets every target's brightness DP to its own Low (if dim) or High (if not) value -- no
+    /// state read of its own, the direction must already be decided by the caller (mirrors
+    /// GoveeClient.ApplyBrightnessDirectionAsync). Each target keeps its own range since
+    /// brightness DP scale varies per device/category.
+    public async Task ApplyBrightnessDirectionAsync(
+        bool dim, IReadOnlyList<(string DeviceId, string BrightnessCode, int Low, int High)> targets,
+        TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
+    {
+        foreach (var target in targets)
+        {
+            var value = dim ? target.Low : target.High;
+            await SendBrightnessCommandAsync(target.DeviceId, target.BrightnessCode, value, dataCenter, accessId, accessSecret, cancellationToken);
+        }
+    }
+
+    private async Task SendBrightnessCommandAsync(
+        string deviceId, string brightnessCode, int value,
+        TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var body = JsonSerializer.Serialize(new
+            {
+                commands = new[] { new { code = brightnessCode, value } }
+            });
+
+            var response = await SendSignedRequestAsync(HttpMethod.Post, $"/v1.0/devices/{deviceId}/commands", body, dataCenter, accessId, accessSecret, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning("Tuya brightness command for {DeviceId} failed ({Status}): {Body}", deviceId, response.StatusCode, responseBody);
+            }
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning(error, "Tuya brightness command for {DeviceId} failed.", deviceId);
+        }
+    }
+
     private async Task SendCommandAsync(
         string deviceId, string powerCode, bool powerOn,
         TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
