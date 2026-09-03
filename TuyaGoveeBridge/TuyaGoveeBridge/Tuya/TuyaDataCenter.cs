@@ -26,6 +26,19 @@ public static class TuyaDataCenterExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(dataCenter))
     };
 
+    /// Matches the iOS app's TuyaDataCenter.host (DeckApp/Models/TuyaModels.swift) exactly --
+    /// these six REST hosts are finer-grained than the four Pulsar endpoints above.
+    public static string RestApiHost(this TuyaDataCenter dataCenter) => dataCenter switch
+    {
+        TuyaDataCenter.WestAmerica => "https://openapi.tuyaus.com",
+        TuyaDataCenter.EastAmerica => "https://openapi-ueaz.tuyaus.com",
+        TuyaDataCenter.CentralEurope => "https://openapi.tuyaeu.com",
+        TuyaDataCenter.WestEurope => "https://openapi-weaz.tuyaeu.com",
+        TuyaDataCenter.China => "https://openapi.tuyacn.com",
+        TuyaDataCenter.India => "https://openapi.tuyain.com",
+        _ => throw new ArgumentOutOfRangeException(nameof(dataCenter))
+    };
+
     public static bool TryParse(string? value, out TuyaDataCenter dataCenter)
     {
         if (!string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, ignoreCase: true, out TuyaDataCenter parsed))

@@ -4,17 +4,18 @@ using System.Text.Json;
 namespace TuyaGoveeBridge.Govee;
 
 /// Minimal Govee cloud client, mirroring the shape (and exact request bodies) of the iOS app's
-/// GoveeClient.swift -- just enough to turn a light on/off from the bridge, for the Tuya button
-/// automation. Not a full port: no device discovery or state polling beyond what toggling needs.
+/// GoveeClient.swift -- just enough to turn lights on/off and set brightness from the bridge,
+/// for the Tuya button automation. Not a full port: no device discovery or state polling beyond
+/// what these actions need.
 public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<GoveeClient> logger)
 {
     private static readonly Uri BaseUri = new("https://openapi.api.govee.com");
 
     public Task TurnOnAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
-        ControlAsync(sku, device, apiKey, powerOn: true, cancellationToken);
+        SetOnOffAsync(sku, device, apiKey, powerOn: true, cancellationToken);
 
     public Task TurnOffAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
-        ControlAsync(sku, device, apiKey, powerOn: false, cancellationToken);
+        SetOnOffAsync(sku, device, apiKey, powerOn: false, cancellationToken);
 
     /// Govee's control endpoint is set-only (no toggle), so a toggle first reads current state.
     /// If the state read fails, defaults to turning on -- a light that's already on staying on
@@ -22,10 +23,55 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
     public async Task ToggleAsync(string sku, string device, string apiKey, CancellationToken cancellationToken)
     {
         var isOn = await TryGetPowerStateAsync(sku, device, apiKey, cancellationToken);
-        await ControlAsync(sku, device, apiKey, powerOn: !(isOn ?? false), cancellationToken);
+        await SetOnOffAsync(sku, device, apiKey, powerOn: !(isOn ?? false), cancellationToken);
     }
 
-    private async Task ControlAsync(string sku, string device, string apiKey, bool powerOn, CancellationToken cancellationToken)
+    /// Applies one on/off action to several lights as a single group (e.g. one button
+    /// controlling multiple bulbs). For "toggle", the direction is decided once from the first
+    /// target's current state and then applied identically to every target -- each light
+    /// toggling independently would let repeated presses drift them out of sync with each
+    /// other, since they'd diverge the moment any one of them was already in a different state
+    /// than the rest.
+    public async Task ApplyAsync(string action, IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken)
+    {
+        if (targets.Count == 0) return;
+
+        var powerOn = action switch
+        {
+            "turnOn" => true,
+            "turnOff" => false,
+            _ => !(await TryGetPowerStateAsync(targets[0].Sku, targets[0].Device, apiKey, cancellationToken) ?? false)
+        };
+
+        foreach (var target in targets)
+            await SetOnOffAsync(target.Sku, target.Device, apiKey, powerOn, cancellationToken);
+    }
+
+    /// Flips every target between 1% and 100% brightness together (e.g. a button's long press),
+    /// using the same "decide once from the first target, apply to all" approach as ApplyAsync
+    /// so the lights can't drift out of sync with each other across repeated presses. A light
+    /// that's off stays off -- setting brightness doesn't turn a light on, matching how the
+    /// physical dimmer on most lights behaves.
+    public async Task ApplyBrightnessToggleAsync(
+        IReadOnlyList<(string Sku, string Device)> targets, string apiKey, CancellationToken cancellationToken,
+        int lowPercent = 1, int highPercent = 100, int midpoint = 50)
+    {
+        if (targets.Count == 0) return;
+
+        var current = await TryGetBrightnessAsync(targets[0].Sku, targets[0].Device, apiKey, cancellationToken);
+        var target = (current ?? 0) >= midpoint ? lowPercent : highPercent;
+
+        foreach (var device in targets)
+            await SetBrightnessAsync(device.Sku, device.Device, apiKey, target, cancellationToken);
+    }
+
+    private Task SetOnOffAsync(string sku, string device, string apiKey, bool powerOn, CancellationToken cancellationToken) =>
+        ControlAsync(sku, device, apiKey, "devices.capabilities.on_off", "powerSwitch", powerOn ? 1 : 0, cancellationToken);
+
+    private Task SetBrightnessAsync(string sku, string device, string apiKey, int percent, CancellationToken cancellationToken) =>
+        ControlAsync(sku, device, apiKey, "devices.capabilities.range", "brightness", percent, cancellationToken);
+
+    private async Task ControlAsync(string sku, string device, string apiKey, string type, string instance, int value, CancellationToken cancellationToken)
     {
         using var client = httpClientFactory.CreateClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/control"));
@@ -33,28 +79,26 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         request.Content = JsonContent.Create(new
         {
             requestId = Guid.NewGuid().ToString(),
-            payload = new
-            {
-                sku,
-                device,
-                capability = new
-                {
-                    type = "devices.capabilities.on_off",
-                    instance = "powerSwitch",
-                    value = powerOn ? 1 : 0
-                }
-            }
+            payload = new { sku, device, capability = new { type, instance, value } }
         });
 
         using var response = await client.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            logger.LogWarning("Govee control request for {Device} failed ({Status}): {Body}", device, response.StatusCode, body);
+            logger.LogWarning("Govee control request for {Device} ({Instance}) failed ({Status}): {Body}", device, instance, response.StatusCode, body);
         }
     }
 
-    private async Task<bool?> TryGetPowerStateAsync(string sku, string device, string apiKey, CancellationToken cancellationToken)
+    private Task<bool?> TryGetPowerStateAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
+        TryGetCapabilityValueAsync<bool>(sku, device, apiKey, "powerSwitch", value => value.ValueKind == JsonValueKind.Number && value.GetInt32() != 0, cancellationToken);
+
+    private Task<int?> TryGetBrightnessAsync(string sku, string device, string apiKey, CancellationToken cancellationToken) =>
+        TryGetCapabilityValueAsync<int>(sku, device, apiKey, "brightness", value => value.ValueKind == JsonValueKind.Number ? value.GetInt32() : (int?)null, cancellationToken);
+
+    private async Task<T?> TryGetCapabilityValueAsync<T>(
+        string sku, string device, string apiKey, string instance, Func<JsonElement, T?> extract, CancellationToken cancellationToken)
+        where T : struct
     {
         try
         {
@@ -64,26 +108,25 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
             request.Content = JsonContent.Create(new { requestId = Guid.NewGuid().ToString(), payload = new { sku, device } });
 
             using var response = await client.SendAsync(request, cancellationToken);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode) return default;
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             if (!document.RootElement.TryGetProperty("payload", out var payload)
                 || !payload.TryGetProperty("capabilities", out var capabilities))
-                return null;
+                return default;
 
             foreach (var capability in capabilities.EnumerateArray())
             {
-                if (capability.GetProperty("instance").GetString() != "powerSwitch") continue;
-                var value = capability.GetProperty("state").GetProperty("value");
-                return value.ValueKind == JsonValueKind.Number && value.GetInt32() != 0;
+                if (capability.GetProperty("instance").GetString() != instance) continue;
+                return extract(capability.GetProperty("state").GetProperty("value"));
             }
-            return null;
+            return default;
         }
         catch (Exception error)
         {
-            logger.LogWarning("Govee state request for {Device} failed: {Message}", device, error.Message);
-            return null;
+            logger.LogWarning("Govee state request for {Device} ({Instance}) failed: {Message}", device, instance, error.Message);
+            return default;
         }
     }
 }

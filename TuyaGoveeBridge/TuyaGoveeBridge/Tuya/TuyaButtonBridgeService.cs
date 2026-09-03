@@ -13,16 +13,14 @@ namespace TuyaGoveeBridge.Tuya;
 /// independent of any phone or PC -- that's the entire point: a physical button press is an
 /// event that can happen at any time, and only something always-on can react to it reliably.
 ///
-/// The exact Tuya device-property (DP) code and value that mean "pressed" for this specific
-/// button model aren't known yet -- every status message received for a configured device ID is
-/// logged in full at Information level and unconditionally treated as a press. Zigbee scene
-/// switches typically only report a status message when actually pressed (unlike a plug, which
-/// reports ongoing telemetry), so "a message arrived for this device" is a reasonable starting
-/// trigger; narrow this to a specific DP code/value once real press payloads are visible in the
-/// log, if it turns out something else on the device also produces a status message.
+/// Confirmed from a live press: this button model reports its click type as a DP named
+/// "switch_type_1" with value "single_click" (also expect "double_click"/"long_press") inside a
+/// devicePropertyMessage -- there's no persistent on/off state to report, so any
+/// devicePropertyMessage for a configured device ID is treated as a press.
 public sealed class TuyaButtonBridgeService(
     BridgeOptions options,
     GoveeClient goveeClient,
+    TuyaLightClient tuyaLightClient,
     ILogger<TuyaButtonBridgeService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -87,7 +85,7 @@ public sealed class TuyaButtonBridgeService(
             {
                 message.Properties.TryGetValue("em", out var encryptionMode);
                 var decrypted = TuyaMessageDecryptor.Decrypt(encryptionMode, message.Data.ToArray(), options.AccessSecret);
-                await HandleDecryptedMessageAsync(decrypted, buttonsByDeviceId, options.GoveeApiKey, stoppingToken);
+                await HandleDecryptedMessageAsync(decrypted, buttonsByDeviceId, dataCenter, stoppingToken);
             }
             catch (Exception error)
             {
@@ -100,29 +98,59 @@ public sealed class TuyaButtonBridgeService(
     private async Task HandleDecryptedMessageAsync(
         string decrypted,
         Dictionary<string, ButtonMapping> buttonsByDeviceId,
-        string goveeApiKey,
+        TuyaDataCenter dataCenter,
         CancellationToken cancellationToken)
     {
         using var document = JsonDocument.Parse(decrypted);
         var root = document.RootElement;
-        if (!root.TryGetProperty("devId", out var devIdElement)) return;
+
+        // Real message shape (confirmed from a live button press), unlike the flatter shape
+        // assumed before any press had been observed: the device ID and DP payload are nested
+        // under "bizData", e.g. {"bizCode":"devicePropertyMessage","bizData":{"devId":"...",
+        // "properties":[{"code":"switch_type_1","value":"single_click",...}]}}. The DP named
+        // "switch_type_1" carries the click type (single_click confirmed live; double_click and
+        // long_press are Tuya's documented naming for this DP but not yet observed from this
+        // specific button).
+        if (!root.TryGetProperty("bizData", out var bizData) || !bizData.TryGetProperty("devId", out var devIdElement)) return;
         var deviceId = devIdElement.GetString();
         if (deviceId is null || !buttonsByDeviceId.TryGetValue(deviceId, out var button)) return;
 
-        var statusJson = root.TryGetProperty("status", out var status) ? status.GetRawText() : "(none)";
-        logger.LogInformation("Tuya button '{DeviceId}' reported status: {Status}", deviceId, statusJson);
+        var clickType = FindSwitchTypeValue(bizData);
+        logger.LogInformation("Tuya button '{DeviceId}' click type: {ClickType}", deviceId, clickType ?? "(none)");
 
-        switch (button.Action)
+        if (clickType is null || !button.ClickActions.TryGetValue(clickType, out var action))
         {
-            case "turnOn":
-                await goveeClient.TurnOnAsync(button.GoveeSku, button.GoveeDevice, goveeApiKey, cancellationToken);
-                break;
-            case "turnOff":
-                await goveeClient.TurnOffAsync(button.GoveeSku, button.GoveeDevice, goveeApiKey, cancellationToken);
-                break;
-            default:
-                await goveeClient.ToggleAsync(button.GoveeSku, button.GoveeDevice, goveeApiKey, cancellationToken);
-                break;
+            logger.LogInformation("Tuya button '{DeviceId}' click type '{ClickType}' has no configured action; ignoring.", deviceId, clickType ?? "(none)");
+            return;
         }
+
+        if (button.Targets.Count > 0)
+        {
+            var goveeTargets = button.Targets.Select(target => (target.GoveeSku, target.GoveeDevice)).ToList();
+            if (action == "toggleBrightness")
+                await goveeClient.ApplyBrightnessToggleAsync(goveeTargets, options.GoveeApiKey, cancellationToken);
+            else
+                await goveeClient.ApplyAsync(action, goveeTargets, options.GoveeApiKey, cancellationToken);
+        }
+
+        // toggleBrightness only applies to Govee targets above -- these lights' brightness DP
+        // and scale vary per device/category and aren't wired up, so skip them for that action.
+        if (button.TuyaLightTargets.Count > 0 && action != "toggleBrightness")
+        {
+            var tuyaTargets = button.TuyaLightTargets.Select(target => (target.DeviceId, target.PowerCode)).ToList();
+            await tuyaLightClient.ApplyAsync(action, tuyaTargets, dataCenter, options.AccessId, options.AccessSecret, cancellationToken);
+        }
+    }
+
+    private static string? FindSwitchTypeValue(JsonElement bizData)
+    {
+        if (!bizData.TryGetProperty("properties", out var properties)) return null;
+        foreach (var property in properties.EnumerateArray())
+        {
+            if (property.TryGetProperty("code", out var code) && code.GetString() == "switch_type_1"
+                && property.TryGetProperty("value", out var value))
+                return value.GetString();
+        }
+        return null;
     }
 }

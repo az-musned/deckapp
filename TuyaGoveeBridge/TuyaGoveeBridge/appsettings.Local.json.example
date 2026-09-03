@@ -5,8 +5,30 @@
     "DataCenter": "centralEurope",
     "GoveeApiKey": "your-govee-api-key",
     "Buttons": [
-      { "DeviceId": "first-button-device-id", "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:11", "Action": "toggle" },
-      { "DeviceId": "second-button-device-id", "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:22", "Action": "toggle" }
+      {
+        "DeviceId": "first-button-device-id",
+        "ClickActions": {
+          "single_click": "toggle",
+          "double_click": "toggleBrightness",
+          "long_press": "toggleBrightness"
+        },
+        "Targets": [
+          { "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:11" },
+          { "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:22" }
+        ],
+        "TuyaLightTargets": [
+          { "DeviceId": "some-tuya-light-device-id", "PowerCode": "switch_led" }
+        ]
+      },
+      {
+        "DeviceId": "second-button-device-id",
+        "ClickActions": {
+          "single_click": "toggle"
+        },
+        "Targets": [
+          { "GoveeSku": "H61xx", "GoveeDevice": "AA:BB:CC:DD:EE:FF:00:11" }
+        ]
+      }
     ]
   }
 }
