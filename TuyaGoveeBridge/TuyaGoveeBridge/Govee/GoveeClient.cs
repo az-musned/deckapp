@@ -113,15 +113,19 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         try
         {
             using var client = httpClientFactory.CreateClient();
-            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/control"));
-            request.Headers.Add("Govee-API-Key", apiKey);
-            request.Content = JsonContent.Create(new
+            HttpRequestMessage BuildRequest()
             {
-                requestId = Guid.NewGuid().ToString(),
-                payload = new { sku, device, capability = new { type, instance, value } }
-            });
+                var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/control"));
+                request.Headers.Add("Govee-API-Key", apiKey);
+                request.Content = JsonContent.Create(new
+                {
+                    requestId = Guid.NewGuid().ToString(),
+                    payload = new { sku, device, capability = new { type, instance, value } }
+                });
+                return request;
+            }
 
-            using var response = await SendWithTimeoutAsync(client, request, cancellationToken);
+            using var response = await SendWithTimeoutAndRetryAsync(client, BuildRequest, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -147,11 +151,15 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         try
         {
             using var client = httpClientFactory.CreateClient();
-            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/state"));
-            request.Headers.Add("Govee-API-Key", apiKey);
-            request.Content = JsonContent.Create(new { requestId = Guid.NewGuid().ToString(), payload = new { sku, device } });
+            HttpRequestMessage BuildRequest()
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, "router/api/v1/device/state"));
+                request.Headers.Add("Govee-API-Key", apiKey);
+                request.Content = JsonContent.Create(new { requestId = Guid.NewGuid().ToString(), payload = new { sku, device } });
+                return request;
+            }
 
-            using var response = await SendWithTimeoutAsync(client, request, cancellationToken);
+            using var response = await SendWithTimeoutAndRetryAsync(client, BuildRequest, cancellationToken);
             if (!response.IsSuccessStatusCode) return default;
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -171,6 +179,27 @@ public sealed class GoveeClient(IHttpClientFactory httpClientFactory, ILogger<Go
         {
             logger.LogWarning("Govee state request for {Device} ({Instance}) failed: {Message}", device, instance, error.Message);
             return default;
+        }
+    }
+
+    /// Retries once, immediately, on any failure (including our own timeout) -- the same "idle
+    /// connection after a long gap" pattern observed on TuyaLightClient's calls applies equally
+    /// here, since both go through the same IHttpClientFactory-managed connection pool on this
+    /// VM. Needs a request factory rather than a single HttpRequestMessage because a sent
+    /// request can't be resent. Doesn't retry if the caller's own cancellationToken (not our
+    /// linked timeout token) was what caused the failure.
+    private static async Task<HttpResponseMessage> SendWithTimeoutAndRetryAsync(
+        HttpClient client, Func<HttpRequestMessage> requestFactory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = requestFactory();
+            return await SendWithTimeoutAsync(client, request, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            using var retryRequest = requestFactory();
+            return await SendWithTimeoutAsync(client, retryRequest, cancellationToken);
         }
     }
 

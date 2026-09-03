@@ -177,7 +177,31 @@ public sealed class TuyaLightClient(IHttpClientFactory httpClientFactory, ILogge
         }
     }
 
+    /// Retries once, immediately, on any failure (including our own 10s timeout) -- observed
+    /// live: after the bridge sits idle for ~15 minutes with no Tuya traffic, the first request
+    /// afterward sometimes doesn't complete within the timeout (a fresh DNS lookup/TCP/TLS
+    /// handshake taking longer than a request over an already-warm connection), while an
+    /// immediate second attempt succeeds quickly -- matches the reported "doesn't turn on, but
+    /// spamming the button does" pattern exactly. Doesn't retry if the *caller's* token was what
+    /// cancelled the request (real shutdown/cancellation, not our timeout) -- checked via
+    /// cancellationToken.IsCancellationRequested, since the exception's own token is the linked
+    /// timeout token from SendWithTimeoutAsync, not this one.
     private async Task<HttpResponseMessage> SendSignedRequestAsync(
+        HttpMethod method, string path, string? body,
+        TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendSignedRequestOnceAsync(method, path, body, dataCenter, accessId, accessSecret, cancellationToken);
+        }
+        catch (Exception firstError) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(firstError, "Tuya request to {Path} failed once; retrying immediately.", path);
+            return await SendSignedRequestOnceAsync(method, path, body, dataCenter, accessId, accessSecret, cancellationToken);
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendSignedRequestOnceAsync(
         HttpMethod method, string path, string? body,
         TuyaDataCenter dataCenter, string accessId, string accessSecret, CancellationToken cancellationToken)
     {
